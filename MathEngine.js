@@ -647,8 +647,6 @@ function parsePayload(raw) {
     count: count,
     learnerId: String(args.learnerId || "default"),
     seed: seed,
-    resultFile: String(args.resultFile || ""),
-    doneFile: String(args.doneFile || ""),
     input: input,
     adaptive: args.adaptive !== false && mode === "assessment",
     start: args.start === true || mode === "assessment"

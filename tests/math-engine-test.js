@@ -71,6 +71,8 @@ check("payload defaults and assessment start", function () {
   assert.equal(assessment.count, 15)
   assert.equal(assessment.learnerId, "sam")
   assert.equal(assessment.adaptive, true)
+  assert.equal(assessment.resultFile, undefined)
+  assert.equal(assessment.doneFile, undefined)
 })
 
 check("adaptive level moves up and down", function () {

@@ -40,8 +40,6 @@ Item {
   property string lastResultJson: ""
   property real seed: 1
   property var rng: null
-  property string resultFile: ""
-  property string doneFile: ""
   property string overrideInput: ""
   property var keypadLabels: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "−", "0", "⌫"]
 
@@ -78,8 +76,6 @@ Item {
     root.roundSize = root.payload.count
     root.adaptive = root.payload.adaptive === true
     root.seed = root.payload.seed
-    root.resultFile = root.payload.resultFile
-    root.doneFile = root.payload.doneFile
     root.overrideInput = root.payload.input
     root.feedback = ""
     root.typed = ""
@@ -274,19 +270,7 @@ Item {
       learner.preferredLevel = result.recommendedLevel
     }
     root.saveProgress()
-    root.writeTutorFiles(root.lastResultJson)
     root.screen = "complete"
-  }
-
-  function writeTutorFiles(json) {
-    if (!root.resultFile && !root.doneFile) return
-    var cmd = "true"
-    if (root.resultFile)
-      cmd = "printf '%s\\n' " + Util.shellQuote(json) + " > " + Util.shellQuote(root.resultFile)
-    if (root.doneFile)
-      cmd += "; : > " + Util.shellQuote(root.doneFile)
-    doneProc.command = ["bash", "-c", cmd]
-    doneProc.running = true
   }
 
   function appendDigit(digit) {
@@ -409,8 +393,6 @@ Item {
     onLoadFailed: root.loadProgress("{}")
     onFileChanged: reload()
   }
-
-  Process { id: doneProc }
 
   ListModel { id: levelModel }
 

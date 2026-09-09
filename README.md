@@ -95,15 +95,12 @@ round counts). Removing the plugin does not delete that file.
 ## AI Tutor contract
 
 Keep the overlay loaded (`keepLoaded` is set) so the tutor can summon it with
-a payload and later `call` for the same session’s JSON. The file round-trip
-matches Omarchy’s image-picker pattern: the tutor creates temp files, the
-plugin writes the result, then touches `doneFile`.
+a payload and later `call` for the same session’s JSON. Results are returned
+only over shell IPC. The summon payload does not accept file paths.
 
 Summon an assessment:
 
 ```sh
-RESULT="$(mktemp)"
-DONE="$(mktemp)"
 omarchy-shell shell summon omarchykids.math "$(cat <<EOF
 {
   "mode": "assessment",
@@ -111,15 +108,17 @@ omarchy-shell shell summon omarchykids.math "$(cat <<EOF
   "level": 3,
   "count": 12,
   "seed": 42,
-  "adaptive": true,
-  "resultFile": "$RESULT",
-  "doneFile": "$DONE"
+  "adaptive": true
 }
 EOF
 )"
 ```
 
-Wait until `"$DONE"` exists, then read `"$RESULT"`.
+When the round finishes (or is abandoned), read the result:
+
+```sh
+omarchy-shell shell call omarchykids.math lastResult '{}'
+```
 
 | Payload field | Meaning |
 | --- | --- |
@@ -130,8 +129,6 @@ Wait until `"$DONE"` exists, then read `"$RESULT"`.
 | `seed` | Repeatable item stream |
 | `adaptive` | Assessment default `true`; every 3 items may move a level |
 | `input` | Force `choices` or `keypad` |
-| `resultFile` | Path to write the result JSON |
-| `doneFile` | Touched when the write is finished (including abandon) |
 
 Result shape:
 
