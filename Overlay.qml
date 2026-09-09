@@ -5,6 +5,7 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "MathEngine.js" as MathEngine
+import "LabEngine.js" as Lab
 
 Item {
   id: root
@@ -22,7 +23,11 @@ Item {
   property int roundSize: 10
   property bool adaptive: false
   property var payload: ({})
-  property var progress: ({ schemaVersion: 1, learners: {}, lastAssessment: null })
+  property var progress: ({
+      schemaVersion: 1,
+      learners: {},
+      lastAssessment: null
+    })
   property var questions: []
   property int questionIndex: 0
   property var currentQuestion: null
@@ -32,6 +37,10 @@ Item {
   property string feedback: ""
   property int attempts: 0
   property int streak: 0
+  property int bestSessionStreak: 0
+  property bool itemLocked: false
+  property bool hintShown: false
+  property bool hintUsed: false
   property var sessionItems: []
   property bool sessionOpen: false
   property string startedAt: ""
@@ -59,8 +68,10 @@ Item {
 
   readonly property var currentLevel: MathEngine.levelById(root.levelId)
   readonly property bool usingChoices: {
-    if (!root.currentQuestion) return true
-    if (root.overrideInput) return root.overrideInput === "choices"
+    if (!root.currentQuestion)
+      return true
+    if (root.overrideInput)
+      return root.overrideInput === "choices"
     return root.currentQuestion.input !== "keypad"
   }
 
@@ -69,6 +80,9 @@ Item {
   }
 
   function open(payloadJson) {
+    if (root.sessionOpen && root.mode === "assessment")
+      root.finishSession("abandoned")
+    advanceTimer.stop()
     root.progress = MathEngine.normalizeProgress(root.progress)
     root.payload = MathEngine.parsePayload(payloadJson || "{}")
     root.mode = root.payload.mode
@@ -92,13 +106,16 @@ Item {
       root.screen = "home"
     }
 
-    Qt.callLater(function () { keyCatcher.forceActiveFocus() })
+    Qt.callLater(function () {
+      keyboardAnchor.forceActiveFocus()
+    })
   }
 
   function close() {
     if (root.sessionOpen && root.mode === "assessment")
       root.finishSession("abandoned")
     advanceTimer.stop()
+    root.sessionOpen = false
     root.opened = false
   }
 
@@ -109,8 +126,10 @@ Item {
   }
 
   function toggle() {
-    if (root.opened) root.dismiss()
-    else root.open("{}")
+    if (root.opened)
+      root.dismiss()
+    else
+      root.open("{}")
   }
 
   function lastResult() {
@@ -135,6 +154,10 @@ Item {
   }
 
   function beginRound(levelId) {
+    advanceTimer.stop()
+    root.lastResultObject = null
+    root.lastResultJson = ""
+    root.bestSessionStreak = 0
     root.levelId = MathEngine.clampLevelId(levelId)
     root.rng = MathEngine.createRng(root.seed)
     root.sessionItems = []
@@ -148,7 +171,7 @@ Item {
       root.questions = []
       root.pushAdaptiveQuestion()
     } else {
-      root.questions = MathEngine.generateRound(root.levelId, root.roundSize, root.rng)
+      root.questions = root.mode === "assessment" ? MathEngine.generateRound(root.levelId, root.roundSize, root.rng) : MathEngine.generatePracticeRound(root.levelId, root.roundSize, root.seed, MathEngine.learnerRecord(root.progress, root.learnerId))
     }
     root.showQuestionAt(0)
     root.screen = "play"
@@ -160,7 +183,8 @@ Item {
   }
 
   function showQuestionAt(index) {
-    if (index < 0 || index >= root.questions.length) return
+    if (index < 0 || index >= root.questions.length)
+      return
     root.questionIndex = index
     root.currentQuestion = root.questions[index]
     root.choiceValues = (root.currentQuestion && root.currentQuestion.choices) || []
@@ -168,43 +192,66 @@ Item {
     root.typed = ""
     root.feedback = ""
     root.attempts = 0
+    root.itemLocked = false
+    root.hintShown = false
+    root.hintUsed = false
+    countingLights.reset()
     root.questionStartedMs = Date.now()
+    Qt.callLater(function () {
+      viewport.contentY = 0
+      keyboardAnchor.forceActiveFocus()
+    })
   }
 
   function currentInput() {
     if (root.usingChoices) {
-      if (root.choiceCursor < 0 || root.choiceCursor >= root.choiceValues.length) return null
+      if (root.choiceCursor < 0 || root.choiceCursor >= root.choiceValues.length)
+        return null
       return root.choiceValues[root.choiceCursor]
     }
     return root.typed
   }
 
   function submitCurrent() {
-    if (!root.currentQuestion || root.feedback === "correct") return
-    if (!root.usingChoices && !root.typed.length) return
-    var graded = MathEngine.grade(root.currentQuestion, root.currentInput())
+    if (!root.sessionOpen || !root.currentQuestion || root.itemLocked)
+      return
+    var response = root.currentInput()
+    if (MathEngine.parseResponse(response) === null)
+      return
+    var graded = MathEngine.grade(root.currentQuestion, response)
     root.attempts++
-    if (graded.correct) {
-      root.feedback = "correct"
-      root.streak++
-      root.recordItem(true, graded.response)
-      advanceTimer.interval = root.mode === "assessment" ? 550 : 900
-      advanceTimer.restart()
-    } else if (root.mode === "assessment") {
-      root.feedback = "wrong"
-      root.streak = 0
-      root.recordItem(false, graded.response)
+    if (root.mode === "assessment") {
+      root.itemLocked = true
+      root.feedback = "recorded"
+      root.recordItem(graded.correct, graded.response)
       advanceTimer.interval = 550
       advanceTimer.restart()
+    } else if (graded.correct) {
+      root.itemLocked = true
+      root.feedback = "correct"
+      root.streak = root.attempts === 1 && !root.hintUsed ? root.streak + 1 : 0
+      root.bestSessionStreak = Math.max(root.bestSessionStreak, root.streak)
+      root.recordItem(true, graded.response)
     } else if (root.attempts >= 2) {
+      root.itemLocked = true
       root.feedback = "reveal"
       root.streak = 0
       root.recordItem(false, graded.response)
     } else {
       root.feedback = "wrong"
+      root.hintShown = true
+      root.hintUsed = true
       root.streak = 0
-      if (!root.usingChoices) root.typed = ""
+      if (!root.usingChoices)
+        root.typed = ""
     }
+  }
+
+  function showHint() {
+    if (root.mode === "assessment" || root.itemLocked)
+      return
+    root.hintUsed = true
+    root.hintShown = !root.hintShown
   }
 
   function recordItem(correct, response) {
@@ -218,6 +265,7 @@ Item {
       response: response,
       correct: correct === true,
       attempts: root.attempts,
+      hintUsed: root.hintUsed,
       ms: Math.max(0, Date.now() - root.questionStartedMs)
     }
     root.sessionItems = root.sessionItems.concat([item])
@@ -225,8 +273,8 @@ Item {
 
   function goNext() {
     advanceTimer.stop()
-    if (!root.sessionOpen) return
-
+    if (!root.sessionOpen || !root.itemLocked)
+      return
     if (root.adaptive && root.sessionItems.length < root.roundSize) {
       if (root.sessionItems.length >= 3 && (root.sessionItems.length % 3) === 0) {
         var window = root.sessionItems.slice(root.sessionItems.length - 3)
@@ -247,7 +295,8 @@ Item {
   }
 
   function finishSession(status) {
-    if (!root.sessionOpen) return
+    if (!root.sessionOpen)
+      return
     root.sessionOpen = false
     advanceTimer.stop()
     var finishedAt = new Date().toISOString()
@@ -263,57 +312,72 @@ Item {
     })
     root.lastResultObject = result
     root.lastResultJson = JSON.stringify(result, null, 2)
-    root.progress.lastAssessment = result
-    root.progress = MathEngine.recordRound(root.progress, root.learnerId, root.levelId, result.correct, result.total, root.streak)
-    if (root.mode === "assessment") {
-      var learner = MathEngine.learnerRecord(root.progress, root.learnerId)
-      learner.preferredLevel = result.recommendedLevel
+    if (result.total > 0) {
+      root.progress = MathEngine.recordSession(root.progress, result, root.bestSessionStreak)
+      root.saveProgress()
     }
-    root.saveProgress()
     root.screen = "complete"
   }
 
   function appendDigit(digit) {
-    if (root.usingChoices || root.feedback === "correct" || root.feedback === "reveal") return
-    if (root.typed.length >= 8) return
-    root.feedback = ""
+    if (root.usingChoices || root.itemLocked)
+      return
+    if (root.typed.length >= 8)
+      return
     root.typed += digit
   }
 
   function backspace() {
-    if (root.usingChoices) return
+    if (root.usingChoices || root.itemLocked)
+      return
     root.typed = root.typed.slice(0, -1)
   }
 
   function toggleSign() {
-    if (root.usingChoices) return
-    if (root.typed.indexOf("-") === 0) root.typed = root.typed.slice(1)
-    else root.typed = "-" + root.typed
+    if (root.usingChoices || root.itemLocked)
+      return
+    if (root.typed.indexOf("-") === 0)
+      root.typed = root.typed.slice(1)
+    else
+      root.typed = "-" + root.typed
   }
 
   function selectChoice(index) {
-    if (!root.usingChoices) return
-    if (index < 0 || index >= root.choiceValues.length) return
+    if (!root.usingChoices || root.itemLocked)
+      return
+    if (index < 0 || index >= root.choiceValues.length)
+      return
     root.choiceCursor = index
     root.submitCurrent()
   }
 
   function moveChoice(delta) {
-    if (!root.usingChoices || root.choiceValues.length === 0) return
+    if (!root.usingChoices || root.itemLocked || root.choiceValues.length === 0)
+      return
     var next = root.choiceCursor + delta
-    if (next < 0) next = root.choiceValues.length - 1
-    if (next >= root.choiceValues.length) next = 0
+    if (next < 0)
+      next = root.choiceValues.length - 1
+    if (next >= root.choiceValues.length)
+      next = 0
     root.choiceCursor = next
+    var button = choiceButtons.itemAt(next)
+    if (button)
+      button.forceActiveFocus()
   }
 
   function handleKey(event) {
+    if (event.isAutoRepeat) {
+      event.accepted = true
+      return
+    }
     if (event.key === Qt.Key_Escape) {
       if (root.screen === "play" && root.mode === "assessment") {
         root.finishSession("abandoned")
       } else if (root.screen === "play") {
+        advanceTimer.stop()
         root.sessionOpen = false
         root.screen = "home"
-      } else if (root.screen === "levels" || root.screen === "complete") {
+      } else if (root.screen === "levels" || root.screen === "complete" || root.screen === "lab") {
         root.screen = "home"
       } else {
         root.dismiss()
@@ -322,15 +386,23 @@ Item {
       return
     }
 
-    if (root.screen !== "play") return
-
-    if (root.feedback === "reveal" && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space)) {
+    if (root.screen !== "play")
+      return
+    if (root.itemLocked && root.mode !== "assessment" && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space)) {
       root.goNext()
       event.accepted = true
       return
     }
 
-    if (event.key === Qt.Key_Backspace) {
+    if (root.itemLocked) {
+      event.accepted = true
+      return
+    }
+
+    if (event.key === Qt.Key_H && root.mode === "practice") {
+      root.showHint()
+      event.accepted = true
+    } else if (event.key === Qt.Key_Backspace) {
       root.backspace()
       event.accepted = true
     } else if (event.key === Qt.Key_Minus) {
@@ -360,20 +432,35 @@ Item {
     }
   }
 
-  function starsText(count) {
-    var n = Math.max(0, Math.min(3, count))
-    var out = ""
-    for (var i = 0; i < 3; i++) out += i < n ? "★" : "☆"
-    return out
+  function completeMessage() {
+    if (root.lastResultObject && root.lastResultObject.status === "abandoned")
+      return "Skill check ended early. Your answers so far are saved."
+    if (root.mode === "assessment")
+      return "All done. Thanks for exploring what you know."
+    return "You made time to learn. Take a break, or try an invention in the Number Lab."
   }
 
-  function completeMessage() {
-    if (root.mode === "assessment") return "All done. You practiced a lot of math."
-    var stars = root.lastResultObject ? MathEngine.starsForAccuracy(root.lastResultObject.accuracy) : 0
-    if (stars >= 3) return "Wow — you crushed it."
-    if (stars === 2) return "Nice work. Keep going."
-    if (stars === 1) return "Good try. Want another round?"
-    return "Practice makes this easier. Go again?"
+  function startPractice() {
+    root.mode = "practice"
+    root.adaptive = false
+    root.roundSize = 10
+    root.seed = Math.max(Date.now(), root.seed + 1)
+    root.beginRound(root.levelId)
+  }
+
+  function saveNotebook(entries) {
+    var learner = MathEngine.learnerRecord(root.progress, root.learnerId)
+    learner.notebook = Lab.normalizeNotebook(entries)
+    learner.preferredLevel = root.levelId
+    root.progress = MathEngine.normalizeProgress(JSON.stringify(root.progress))
+    root.saveProgress()
+  }
+
+  onScreenChanged: {
+    viewport.contentY = 0
+    Qt.callLater(function () {
+      keyboardAnchor.forceActiveFocus()
+    })
   }
 
   Timer {
@@ -394,7 +481,9 @@ Item {
     onFileChanged: reload()
   }
 
-  ListModel { id: levelModel }
+  ListModel {
+    id: levelModel
+  }
 
   Component.onCompleted: {
     var all = MathEngine.levels()
@@ -408,63 +497,15 @@ Item {
     }
   }
 
-  component KidButton: Rectangle {
-    id: btn
-    property string label: ""
-    property string hint: ""
-    property bool active: false
-    property bool primary: false
-    property bool hovered: mouse.containsMouse
-    signal tapped()
-
-    implicitHeight: Math.max(Style.space(hint !== "" ? 92 : 52), (hint ? Style.font.title + Style.font.bodySmall + Style.spacing.labelGap : Style.font.title) + Style.spacing.controlPaddingY * 2)
-    radius: root.cornerRadius
-    color: primary || active || hovered ? root.selectedBackground : "transparent"
-    border.width: Style.normalBorderWidth
-    border.color: Util.alpha(root.border, primary || active || hovered ? 0.9 : 0.35)
-
-    Column {
-      anchors.centerIn: parent
-      spacing: Style.spacing.labelGap
-      width: parent.width - Style.space(16)
-
-      Text {
-        width: parent.width
-        text: btn.label
-        color: btn.primary || btn.active || btn.hovered ? root.selectedText : root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.title
-        font.bold: btn.primary
-        horizontalAlignment: Text.AlignHCenter
-        wrapMode: Text.WordWrap
-      }
-
-      Text {
-        width: parent.width
-        visible: btn.hint !== ""
-        text: btn.hint
-        color: btn.primary || btn.active || btn.hovered ? root.selectedText : root.foreground
-        opacity: 0.65
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        horizontalAlignment: Text.AlignHCenter
-        wrapMode: Text.WordWrap
-      }
-    }
-
-    MouseArea {
-      id: mouse
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onClicked: btn.tapped()
-    }
-  }
-
   PanelWindow {
     id: panel
     visible: root.opened
-    anchors { top: true; bottom: true; left: true; right: true }
+    anchors {
+      top: true
+      bottom: true
+      left: true
+      right: true
+    }
     color: "transparent"
     WlrLayershell.namespace: "omarchy-kids-math"
     WlrLayershell.layer: WlrLayer.Overlay
@@ -479,7 +520,7 @@ Item {
     MouseArea {
       anchors.fill: parent
       onClicked: {
-        if (root.screen === "home" || root.screen === "levels" || root.screen === "complete")
+        if (root.screen === "home" || root.screen === "levels" || root.screen === "complete" || root.screen === "lab")
           root.dismiss()
       }
     }
@@ -494,32 +535,39 @@ Item {
       borderSpec: root.borderSpec
       padding: root.contentMargin
 
-      MouseArea { anchors.fill: parent; onClicked: {} }
+      MouseArea {
+        anchors.fill: parent
+        onClicked: {}
+      }
 
-      Item {
+      FocusScope {
         id: keyCatcher
         anchors.fill: parent
         focus: true
-        Keys.priority: Keys.BeforeItem
-        Keys.onPressed: function (event) { root.handleKey(event) }
-      }
+        Keys.priority: Keys.AfterItem
+        Keys.onPressed: function (event) {
+          root.handleKey(event)
+        }
 
-      Column {
-        id: body
-        anchors.fill: parent
-        anchors.topMargin: card.contentTopInset
-        anchors.rightMargin: card.contentRightInset
-        anchors.bottomMargin: card.contentBottomInset
-        anchors.leftMargin: card.contentLeftInset
-        spacing: Style.spacing.md
+        Item {
+          id: keyboardAnchor
+          anchors.fill: parent
+          focus: true
+        }
 
         Row {
-          width: parent.width
+          id: fixedHeader
+          anchors.top: parent.top
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.topMargin: card.contentTopInset
+          anchors.leftMargin: card.contentLeftInset
+          anchors.rightMargin: card.contentRightInset
           spacing: Style.spacing.md
 
           Text {
             width: parent.width - closeBtn.width - parent.spacing
-            text: root.screen === "levels" ? "Pick a level" : (root.screen === "play" ? root.currentLevel.name : "Math")
+            text: root.screen === "levels" ? "Pick a level" : (root.screen === "play" ? root.currentLevel.name : root.screen === "lab" ? "Number Lab" : "Math · make a discovery")
             color: root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.heading
@@ -527,7 +575,7 @@ Item {
             elide: Text.ElideRight
           }
 
-          KidButton {
+          MathButton {
             id: closeBtn
             width: Style.space(88)
             label: "Close"
@@ -535,292 +583,404 @@ Item {
           }
         }
 
-        // Home
-        Column {
-          width: parent.width
-          spacing: Style.spacing.md
-          visible: root.screen === "home"
-
-          Text {
-            width: parent.width
-            text: "Practice math, or check how you are doing."
-            color: root.foreground
-            opacity: 0.78
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.title
-            wrapMode: Text.WordWrap
+        Flickable {
+          id: viewport
+          anchors.fill: parent
+          anchors.topMargin: card.contentTopInset + fixedHeader.height + Style.spacing.md
+          anchors.rightMargin: card.contentRightInset
+          anchors.bottomMargin: card.contentBottomInset
+          anchors.leftMargin: card.contentLeftInset
+          contentWidth: width
+          contentHeight: body.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          function ensureVisible(item) {
+            var position = item.mapToItem(contentItem, 0, 0)
+            if (position.y < contentY)
+              contentY = position.y
+            else if (position.y + item.height > contentY + height)
+              contentY = Math.min(Math.max(0, contentHeight - height), position.y + item.height - height)
           }
 
-          Text {
-            width: parent.width
-            text: "Level " + root.currentLevel.id + " · " + root.currentLevel.name + " · ages " + root.currentLevel.ages
-            color: root.foreground
-            opacity: 0.7
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-          }
-
-          KidButton {
-            width: parent.width
-            primary: true
-            label: "Practice"
-            hint: "10 questions at your level"
-            onTapped: {
-              root.mode = "practice"
-              root.adaptive = false
-              root.roundSize = 10
-              root.beginRound(root.levelId)
-            }
-          }
-
-          KidButton {
-            width: parent.width
-            label: "Check my skills"
-            hint: "A short mix the tutor can read later"
-            onTapped: {
-              root.mode = "assessment"
-              root.adaptive = true
-              root.roundSize = 12
-              root.seed = Date.now()
-              root.beginRound(root.levelId)
-            }
-          }
-
-          KidButton {
-            width: parent.width
-            label: "Change level"
-            hint: "Ages 5–12, from counting to percents"
-            onTapped: root.screen = "levels"
-          }
-        }
-
-        // Levels
-        Grid {
-          width: parent.width
-          visible: root.screen === "levels"
-          columns: 2
-          rowSpacing: Style.spacing.md
-          columnSpacing: Style.spacing.md
-
-          Repeater {
-            model: levelModel
-            delegate: KidButton {
-              required property int levelId
-              required property string title
-              required property string ages
-              required property string blurb
-              width: (body.width - Style.spacing.md) / 2
-              label: levelId + ". " + title
-              hint: "Ages " + ages + " · " + blurb
-              active: root.levelId === levelId
-              onTapped: {
-                root.levelId = levelId
-                root.mode = "practice"
-                root.adaptive = false
-                root.roundSize = 10
-                root.beginRound(levelId)
-              }
-            }
-          }
-        }
-
-        // Play
-        Column {
-          width: parent.width
-          spacing: Style.spacing.md
-          visible: root.screen === "play" && root.currentQuestion
-
-          Row {
-            width: parent.width
+          Column {
+            id: body
+            width: viewport.width
             spacing: Style.spacing.md
 
-            Text {
-              text: (root.questionIndex + 1) + " / " + (root.adaptive ? root.roundSize : Math.max(root.questions.length, 1))
-              color: root.foreground
-              opacity: 0.7
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
+            // Home
+            Column {
+              width: parent.width
+              spacing: Style.spacing.md
+              visible: root.screen === "home"
 
-            Text {
-              text: root.starsText(Math.min(3, Math.floor(root.streak / 3)))
-              color: root.accent
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Text {
-              visible: root.mode === "assessment"
-              text: "Skill check"
-              color: root.foreground
-              opacity: 0.55
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
-          }
-
-          Text {
-            width: parent.width
-            visible: root.currentQuestion && root.currentQuestion.promptKind !== "dots"
-            text: root.currentQuestion ? root.currentQuestion.prompt : ""
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.displayLarge
-            wrapMode: Text.WordWrap
-            horizontalAlignment: Text.AlignHCenter
-          }
-
-          Flow {
-            width: parent.width
-            visible: root.currentQuestion && root.currentQuestion.promptKind === "dots"
-            spacing: Style.space(10)
-            leftPadding: Math.max(0, (parent.width - Math.min(root.currentQuestion ? root.currentQuestion.dots : 0, 5) * Style.space(38)) / 2)
-
-            Repeater {
-              model: root.currentQuestion && root.currentQuestion.promptKind === "dots" ? root.currentQuestion.dots : 0
-              delegate: Rectangle {
-                width: Style.space(28)
-                height: Style.space(28)
-                radius: width / 2
-                color: root.accent
+              Text {
+                width: parent.width
+                text: "Invent, experiment, and find your own way with numbers."
+                color: root.foreground
+                opacity: 0.78
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                wrapMode: Text.WordWrap
               }
-            }
-          }
 
-          Text {
-            width: parent.width
-            visible: root.feedback !== ""
-            text: {
-              if (root.feedback === "correct") return "Yes!"
-              if (root.feedback === "reveal") return "It was " + root.currentQuestion.answer
-              if (root.mode === "assessment") return "On to the next one"
-              return "Not quite — try again"
-            }
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.title
-            horizontalAlignment: Text.AlignHCenter
-          }
-
-          Grid {
-            width: parent.width
-            visible: root.usingChoices
-            columns: Math.min(2, Math.max(1, root.choiceValues.length))
-            rowSpacing: Style.spacing.md
-            columnSpacing: Style.spacing.md
-
-            Repeater {
-              model: root.choiceValues.length
-              delegate: KidButton {
-                required property int index
-                width: (body.width - Style.spacing.md) / 2
-                label: String(root.choiceValues[index])
-                primary: root.choiceCursor === index
-                onTapped: root.selectChoice(index)
+              Text {
+                width: parent.width
+                text: "Level " + root.currentLevel.id + " · " + root.currentLevel.name
+                color: root.foreground
+                opacity: 0.7
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
               }
-            }
-          }
 
-          Rectangle {
-            width: parent.width
-            height: Style.space(64)
-            visible: !root.usingChoices
-            radius: root.cornerRadius
-            color: "transparent"
-            border.width: Style.normalBorderWidth
-            border.color: Util.alpha(root.border, 0.45)
+              MathButton {
+                width: parent.width
+                primary: true
+                label: "Number Lab"
+                hint: "Build a number. Crack a mystery. Save an invention."
+                onTapped: root.screen = "lab"
+              }
 
-            Text {
-              anchors.fill: parent
-              text: root.typed.length ? root.typed : "Type the answer"
-              color: root.foreground
-              opacity: root.typed.length ? 1 : 0.45
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.display
-              horizontalAlignment: Text.AlignHCenter
-              verticalAlignment: Text.AlignVCenter
-            }
-          }
+              MathButton {
+                width: parent.width
+                label: "Practice"
+                hint: "10 questions, with ideas when you need them"
+                onTapped: root.startPractice()
+              }
 
-          Grid {
-            width: parent.width
-            visible: !root.usingChoices
-            columns: 3
-            rowSpacing: Style.space(8)
-            columnSpacing: Style.space(8)
-
-            Repeater {
-              model: 12
-              delegate: KidButton {
-                required property int index
-                readonly property string keyLabel: root.keypadLabels[index]
-                width: (body.width - Style.space(16)) / 3
-                label: keyLabel
+              MathButton {
+                width: parent.width
+                label: "Check my skills"
+                hint: "Find a comfortable place to start"
                 onTapped: {
-                  if (keyLabel === "⌫") root.backspace()
-                  else if (keyLabel === "−") root.toggleSign()
-                  else root.appendDigit(keyLabel)
+                  root.mode = "assessment"
+                  root.adaptive = true
+                  root.roundSize = 12
+                  root.seed = Math.max(Date.now(), root.seed + 1)
+                  root.beginRound(root.levelId)
+                }
+              }
+
+              MathButton {
+                width: parent.width
+                label: "Change level"
+                hint: "Ages 5–12, from counting to percents"
+                onTapped: root.screen = "levels"
+              }
+            }
+
+            // Levels
+            Grid {
+              width: parent.width
+              visible: root.screen === "levels"
+              columns: body.width < Style.space(560) ? 1 : 2
+              rowSpacing: Style.spacing.md
+              columnSpacing: Style.spacing.md
+
+              Repeater {
+                model: levelModel
+                delegate: MathButton {
+                  required property int levelId
+                  required property string title
+                  required property string ages
+                  required property string blurb
+                  width: (body.width - (parent.columns - 1) * Style.spacing.md) / parent.columns
+                  label: levelId + ". " + title
+                  hint: "Ages " + ages + " · " + blurb
+                  active: root.levelId === levelId
+                  onTapped: {
+                    root.levelId = levelId
+                    root.mode = "practice"
+                    root.adaptive = false
+                    root.roundSize = 10
+                    root.screen = "home"
+                  }
                 }
               }
             }
-          }
 
-          KidButton {
-            width: parent.width
-            visible: !root.usingChoices || root.feedback === "reveal"
-            primary: true
-            label: root.feedback === "reveal" ? "Next" : "Check"
-            onTapped: root.feedback === "reveal" ? root.goNext() : root.submitCurrent()
+            Loader {
+              width: parent.width
+              active: root.screen === "lab"
+              visible: active
+              sourceComponent: Component {
+                LabView {
+                  levelId: root.levelId
+                  notebook: Lab.normalizeNotebook(MathEngine.learnerRecord(root.progress, root.learnerId).notebook)
+                  onSaved: function (entries) {
+                    root.saveNotebook(entries)
+                  }
+                  onHomeRequested: root.screen = "home"
+                }
+              }
+            }
+
+            // Play
+            Column {
+              width: parent.width
+              spacing: Style.spacing.md
+              visible: root.screen === "play" && root.currentQuestion
+
+              Row {
+                width: parent.width
+                spacing: Style.spacing.md
+
+                Text {
+                  text: (root.questionIndex + 1) + " / " + (root.adaptive ? root.roundSize : Math.max(root.questions.length, 1))
+                  color: root.foreground
+                  opacity: 0.7
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+
+                Text {
+                  visible: root.mode === "practice"
+                  text: "Take your time"
+                  color: root.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+
+                Text {
+                  visible: root.mode === "assessment"
+                  text: "Skill check"
+                  color: root.foreground
+                  opacity: 0.55
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+
+              Text {
+                width: parent.width
+                visible: root.currentQuestion !== null
+                text: root.currentQuestion ? root.currentQuestion.prompt : ""
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.displayLarge
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+              }
+
+              CounterField {
+                id: countingLights
+                width: parent.width
+                visible: root.currentQuestion && root.currentQuestion.promptKind === "dots"
+                count: visible ? root.currentQuestion.dots : 0
+                columns: 5
+                touchToCount: root.mode === "practice"
+              }
+
+              Row {
+                width: parent.width
+                visible: root.currentQuestion && root.currentQuestion.promptKind === "compare"
+                CounterField {
+                  width: parent.width / 2
+                  count: parent.visible ? root.currentQuestion.left : 0
+                }
+                CounterField {
+                  width: parent.width / 2
+                  count: parent.visible ? root.currentQuestion.right : 0
+                  ink: root.foreground
+                }
+              }
+
+              Text {
+                width: parent.width
+                visible: root.feedback !== ""
+                text: {
+                  if (root.mode === "assessment")
+                    return "Answer saved"
+                  if (root.feedback === "correct")
+                    return root.attempts > 1 || root.hintUsed ? "You worked it out!" : "You found it!"
+                  if (root.feedback === "reveal")
+                    return "It was " + root.currentQuestion.answer
+                  return "Let’s try an idea, then have another go."
+                }
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                horizontalAlignment: Text.AlignHCenter
+              }
+
+              Text {
+                width: parent.width
+                visible: root.mode === "practice" && (root.hintShown || root.itemLocked)
+                text: !root.currentQuestion ? "" : root.itemLocked ? root.currentQuestion.support.explanation : root.currentQuestion.support.hint
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+              }
+
+              Row {
+                width: parent.width
+                visible: root.mode === "practice" && root.hintShown && root.currentQuestion && root.currentQuestion.support.counters.length === 2
+                CounterField {
+                  width: parent.width / 2
+                  count: parent.visible ? root.currentQuestion.support.counters[0] : 0
+                }
+                CounterField {
+                  width: parent.width / 2
+                  count: parent.visible ? root.currentQuestion.support.counters[1] : 0
+                  ink: root.foreground
+                }
+              }
+
+              Grid {
+                width: parent.width
+                visible: root.usingChoices && !root.itemLocked
+                columns: Math.min(2, Math.max(1, root.choiceValues.length))
+                rowSpacing: Style.spacing.md
+                columnSpacing: Style.spacing.md
+
+                Repeater {
+                  id: choiceButtons
+                  model: root.choiceValues.length
+                  delegate: MathButton {
+                    required property int index
+                    width: (body.width - Style.spacing.md) / 2
+                    label: String(root.choiceValues[index])
+                    primary: root.choiceCursor === index
+                    onTapped: root.selectChoice(index)
+                  }
+                }
+              }
+
+              Rectangle {
+                width: parent.width
+                height: Style.space(64)
+                visible: !root.usingChoices && !root.itemLocked
+                radius: root.cornerRadius
+                color: "transparent"
+                border.width: Style.normalBorderWidth
+                border.color: Util.alpha(root.border, 0.45)
+
+                Text {
+                  anchors.fill: parent
+                  text: root.typed.length ? root.typed : "Type the answer"
+                  color: root.foreground
+                  opacity: root.typed.length ? 1 : 0.45
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.display
+                  horizontalAlignment: Text.AlignHCenter
+                  verticalAlignment: Text.AlignVCenter
+                }
+              }
+
+              Grid {
+                width: parent.width
+                visible: !root.usingChoices && !root.itemLocked
+                columns: 3
+                rowSpacing: Style.space(8)
+                columnSpacing: Style.space(8)
+
+                Repeater {
+                  model: 12
+                  delegate: MathButton {
+                    required property int index
+                    readonly property string keyLabel: root.keypadLabels[index]
+                    width: (body.width - Style.space(16)) / 3
+                    label: keyLabel
+                    onTapped: {
+                      if (keyLabel === "⌫")
+                        root.backspace()
+                      else if (keyLabel === "−")
+                        root.toggleSign()
+                      else
+                        root.appendDigit(keyLabel)
+                    }
+                  }
+                }
+              }
+
+              MathButton {
+                width: parent.width
+                visible: (!root.usingChoices && !root.itemLocked) || (root.itemLocked && root.mode === "practice")
+                primary: true
+                label: root.itemLocked ? "Next" : "Check"
+                onTapped: root.itemLocked ? root.goNext() : root.submitCurrent()
+              }
+
+              MathButton {
+                width: parent.width
+                visible: root.mode === "practice" && !root.itemLocked
+                label: root.hintShown ? "Hide idea" : "Give me an idea"
+                hint: "Keyboard: H"
+                onTapped: root.showHint()
+              }
+            }
+
+            // Complete
+            Column {
+              width: parent.width
+              spacing: Style.spacing.md
+              visible: root.screen === "complete"
+
+              Text {
+                width: parent.width
+                text: "✦"
+                color: root.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.displayLarge
+                horizontalAlignment: Text.AlignHCenter
+              }
+
+              Text {
+                width: parent.width
+                text: root.completeMessage()
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+              }
+
+              Text {
+                width: parent.width
+                visible: root.mode === "practice" && root.lastResultObject
+                text: root.lastResultObject ? root.lastResultObject.total + " ideas explored · " + root.lastResultObject.independentCorrect + " solved independently" : ""
+                wrapMode: Text.WordWrap
+                color: root.foreground
+                opacity: 0.7
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.heading
+                horizontalAlignment: Text.AlignHCenter
+              }
+
+              MathButton {
+                width: parent.width
+                primary: true
+                label: "Try the Number Lab"
+                onTapped: root.screen = "lab"
+              }
+
+              MathButton {
+                width: parent.width
+                label: "Take a break"
+                onTapped: root.screen = "home"
+              }
+            }
           }
         }
-
-        // Complete
-        Column {
-          width: parent.width
-          spacing: Style.spacing.md
-          visible: root.screen === "complete"
-
-          Text {
+        Rectangle {
+          anchors.right: parent.right
+          anchors.rightMargin: Math.max(Style.space(4), card.contentRightInset / 3)
+          anchors.top: viewport.top
+          anchors.bottom: viewport.bottom
+          width: Style.space(4)
+          radius: width / 2
+          color: Util.alpha(root.foreground, 0.1)
+          visible: viewport.contentHeight > viewport.height
+          Accessible.ignored: true
+          Rectangle {
             width: parent.width
-            text: root.lastResultObject ? root.starsText(root.mode === "assessment" ? 3 : MathEngine.starsForAccuracy(root.lastResultObject.accuracy)) : ""
-            color: root.accent
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.displayLarge
-            horizontalAlignment: Text.AlignHCenter
-          }
-
-          Text {
-            width: parent.width
-            text: root.completeMessage()
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.title
-            wrapMode: Text.WordWrap
-            horizontalAlignment: Text.AlignHCenter
-          }
-
-          Text {
-            width: parent.width
-            visible: root.mode === "practice" && root.lastResultObject
-            text: root.lastResultObject ? (root.lastResultObject.correct + " out of " + root.lastResultObject.total) : ""
-            color: root.foreground
-            opacity: 0.7
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.heading
-            horizontalAlignment: Text.AlignHCenter
-          }
-
-          KidButton {
-            width: parent.width
-            primary: true
-            label: "Again"
-            onTapped: root.beginRound(root.levelId)
-          }
-
-          KidButton {
-            width: parent.width
-            label: "Home"
-            onTapped: root.screen = "home"
+            height: Math.max(Style.space(24), parent.height * viewport.height / Math.max(1, viewport.contentHeight))
+            y: Math.max(0, Math.min(parent.height - height, (parent.height - height) * viewport.contentY / Math.max(1, viewport.contentHeight - viewport.height)))
+            radius: width / 2
+            color: Util.alpha(root.foreground, 0.6)
           }
         }
       }

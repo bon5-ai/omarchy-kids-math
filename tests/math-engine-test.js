@@ -141,3 +141,104 @@ check("stars thresholds", function () {
 })
 
 console.log("\nAll MathEngine tests passed.")
+
+check("every skill has teaching support and sensible number domains across seeds", () => {
+  engine.levels().forEach(level => {
+    level.skills.forEach(skill => {
+      for (let seed = 1; seed <= 200; seed++) {
+        const q = engine.generateQuestion(level.id, engine.createRng(seed), skill)
+        assert(q.support.hint.length > 15, skill)
+        assert(q.support.explanation.length > 5, skill)
+        assert.strictEqual(new Set(q.choices).size, q.choices.length)
+        if (level.id < 6) {
+          assert(q.answer >= 0, skill)
+          assert(q.choices.every(n => n >= 0), skill)
+        }
+        if (q.promptKind === "compare") {
+          assert(q.prompt.includes(String(q.left)))
+          assert(q.prompt.includes(String(q.right)))
+        }
+      }
+    })
+  })
+})
+
+check("corrupt progress and special learner IDs cannot corrupt other profiles", () => {
+  for (const raw of ["null", "[]", "false", "broken", '{"learners":[]}']) {
+    const data = engine.normalizeProgress(raw)
+    const record = engine.learnerRecord(data, "sam")
+    assert.strictEqual(record.rounds, 0)
+    assert.deepStrictEqual(record.notebook, [])
+  }
+  const data = engine.normalizeProgress('{"learners":{"sam":{"rounds":"oops","byLevel":null,"practiceSkills":[]}}}')
+  const sam = engine.learnerRecord(data, "sam")
+  assert.strictEqual(sam.rounds, 0)
+  assert.deepStrictEqual(sam.byLevel, {})
+  for (const id of ["__proto__", "constructor", "toString"]) {
+    const learner = engine.learnerRecord(data, id)
+    learner.rounds = 7
+    assert.strictEqual(engine.learnerRecord(JSON.parse(JSON.stringify(data)), id).rounds, 7)
+  }
+  assert.strictEqual({}.rounds, undefined)
+  assert.strictEqual(sam.rounds, 0)
+})
+
+check("session progress attributes adaptive items to their actual levels", () => {
+  const result = engine.buildResult({mode: "assessment", status: "complete", learnerId: "sam", levelId: 3, items: [
+    {levelId: 2, skill: "add-within-20", correct: true, attempts: 1},
+    {levelId: 3, skill: "add-within-100", correct: true, attempts: 1},
+    {levelId: 3, skill: "sub-within-100", correct: false, attempts: 1}
+  ]})
+  const data = engine.recordSession(engine.emptyProgress(), result, 2)
+  assert.strictEqual(data.learners.sam.byLevel[2].total, 1)
+  assert.strictEqual(data.learners.sam.byLevel[3].total, 2)
+  assert.strictEqual(data.learners.sam.bestStreak, 2)
+  assert.strictEqual(data.learners.sam.rounds, 1)
+  assert.strictEqual(data.lastAssessment, result)
+  const practice = engine.buildResult({mode: "practice", learnerId: "sam", levelId: 2, items: [
+    {levelId: 2, skill: "add-within-20", correct: true, attempts: 2, hintUsed: true}
+  ]})
+  engine.recordSession(data, practice, 0)
+  assert.strictEqual(data.lastAssessment, result)
+  assert.strictEqual(data.learners.sam.practiceSkills["add-within-20"].independent, 0)
+  assert.strictEqual(data.learners.sam.practiceSkills["add-within-20"].total, 1)
+})
+
+check("abandonment doesn't change preferred level or count as completion", () => {
+  const data = engine.emptyProgress()
+  engine.learnerRecord(data, "sam").preferredLevel = 4
+  engine.recordSession(data, engine.buildResult({mode: "assessment", status: "abandoned", learnerId: "sam", levelId: 4, items: [
+    {levelId: 4, skill: "mul-to-10", correct: false, attempts: 1}
+  ]}), 0)
+  assert.strictEqual(data.learners.sam.preferredLevel, 4)
+  assert.strictEqual(data.learners.sam.rounds, 0)
+  const before = JSON.stringify(data)
+  engine.recordSession(data, engine.buildResult({mode: "assessment", status: "abandoned", learnerId: "sam", items: []}), 0)
+  assert.strictEqual(JSON.stringify(data), before)
+})
+
+check("practice supports weaker skills while retaining whole-level coverage", () => {
+  const data = engine.emptyProgress()
+  const learner = engine.learnerRecord(data, "sam")
+  learner.practiceSkills = {
+    "add-within-20": {independent: 20, total: 20},
+    "sub-within-20": {independent: 0, total: 10},
+    "missing-addend-20": {independent: 20, total: 20}
+  }
+  const round = engine.generatePracticeRound(2, 10, 99, learner)
+  assert.deepStrictEqual(round, engine.generatePracticeRound(2, 10, 99, learner))
+  engine.levels()[1].skills.forEach(skill => assert(round.some(q => q.skill === skill)))
+  assert(round.filter(q => q.skill === "sub-within-20").length >= 5)
+})
+
+check("helped success is learning but not evidence for promotion", () => {
+  const result = engine.buildResult({mode: "practice", learnerId: "sam", levelId: 3, items: Array.from({length: 10}, () => (
+    {levelId: 3, skill: "add-within-100", correct: true, attempts: 2, hintUsed: true}
+  ))})
+  assert.strictEqual(result.correct, 10)
+  assert.strictEqual(result.independentCorrect, 0)
+  const data = engine.recordSession(engine.emptyProgress(), result, 0)
+  assert.strictEqual(data.learners.sam.preferredLevel, 3, "using help alone must not lower the level")
+})
+
+console.log("\nAll extended MathEngine tests passed.")

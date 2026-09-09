@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "omarchykids.math",
   "name": "Kids Math",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Omarchy Kids",
   "license": "MIT",
-  "description": "Leveled math practice and skill checks for ages 5–12, with a JSON contract for the Omarchy Kids AI Tutor.",
+  "description": "An inventive Number Lab, supported math practice, and skill checks for ages 5–12, with an Omarchy Kids AI Tutor contract.",
   "kinds": ["overlay", "bar-widget"],
   "keepLoaded": true,
   "entryPoints": {

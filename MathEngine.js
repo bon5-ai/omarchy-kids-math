@@ -129,7 +129,7 @@ function uniqueChoices(answer, rng, extras, count) {
 
   function add(value) {
     if (typeof value !== "number" || !isFinite(value)) return
-    if (Math.floor(value) !== value) return
+    if (Math.floor(value) !== value || (answer >= 0 && value < 0)) return
     var key = String(value)
     if (seen[key]) return
     seen[key] = true
@@ -191,7 +191,7 @@ function genCompareTo10(rng, level) {
   return question({
     skill: "compare-to-10",
     levelId: level.id,
-    prompt: "Which is more?",
+    prompt: "Which is more?\n" + a + " or " + b,
     promptKind: "compare",
     left: a,
     right: b,
@@ -207,6 +207,7 @@ function genAdd(rng, level, skill, maxSum, minAddend) {
   var a = rngInt(rng, lo, sum - lo)
   var b = sum - a
   return question({
+    operands: [a, b],
     skill: skill,
     levelId: level.id,
     prompt: a + " + " + b,
@@ -222,6 +223,7 @@ function genSub(rng, level, skill, maxStart, minStart) {
   var a = rngInt(rng, lo, hi)
   var b = rngInt(rng, 0, a)
   return question({
+    operands: [a, b],
     skill: skill,
     levelId: level.id,
     prompt: a + " − " + b,
@@ -236,6 +238,7 @@ function genMissingAddend(rng, level, maxSum) {
   var a = rngInt(rng, 1, sum - 1)
   var missing = sum - a
   return question({
+    operands: [a, sum],
     skill: "missing-addend-20",
     levelId: level.id,
     prompt: a + " + □ = " + sum,
@@ -254,6 +257,7 @@ function genSkipCount(rng, level) {
   var seq = [start, start + step, start + step * 2]
   var answer = start + step * 3
   return question({
+    operands: [start, step],
     skill: "skip-count",
     levelId: level.id,
     prompt: "What comes next?\n" + seq.join(", ") + ", …",
@@ -267,6 +271,7 @@ function genMulTo10(rng, level) {
   var a = rngInt(rng, 0, 10)
   var b = rngInt(rng, 1, 10)
   return question({
+    operands: [a, b],
     skill: "mul-to-10",
     levelId: level.id,
     prompt: a + " × " + b,
@@ -281,6 +286,7 @@ function genDivTo10(rng, level) {
   var a = rngInt(rng, 1, 10)
   var product = a * b
   return question({
+    operands: [product, b],
     skill: "div-to-10",
     levelId: level.id,
     prompt: product + " ÷ " + b,
@@ -296,6 +302,7 @@ function genAddWithin1000(rng, level) {
   var b = rngInt(rng, 10, 190)
   b = Math.round(b / 10) * 10
   return question({
+    operands: [a, b],
     skill: "add-within-1000",
     levelId: level.id,
     prompt: a + " + " + b,
@@ -306,9 +313,10 @@ function genAddWithin1000(rng, level) {
 }
 
 function genMul2Digit(rng, level) {
-  var a = rngInt(rng, 11, 19)
+  var a = rngInt(rng, 11, 49)
   var b = rngInt(rng, 2, 9)
   return question({
+    operands: [a, b],
     skill: "mul-2digit",
     levelId: level.id,
     prompt: a + " × " + b,
@@ -323,6 +331,7 @@ function genDivExact(rng, level) {
   var a = rngInt(rng, 4, 12)
   var product = a * b
   return question({
+    operands: [product, b],
     skill: "div-exact",
     levelId: level.id,
     prompt: product + " ÷ " + b,
@@ -333,7 +342,7 @@ function genDivExact(rng, level) {
 }
 
 function genMixedAddSub(rng, level) {
-  var a = rngInt(rng, 20, 90)
+  var a = rngInt(rng, 40, 90)
   var b = rngInt(rng, 10, 40)
   var c = rngInt(rng, 5, 20)
   var addFirst = rng() < 0.5
@@ -347,6 +356,7 @@ function genMixedAddSub(rng, level) {
     answer = a - b + c
   }
   return question({
+    operands: [a, b, c, addFirst],
     skill: "mixed-add-sub",
     levelId: level.id,
     prompt: prompt,
@@ -369,6 +379,7 @@ function genFractionOf(rng, level) {
   var whole = frac.d * groups
   var answer = frac.n * groups
   return question({
+    operands: [frac.n, frac.d, whole],
     skill: "fraction-of",
     levelId: level.id,
     prompt: "What is " + frac.n + "/" + frac.d + " of " + whole + "?",
@@ -387,6 +398,7 @@ function genPercentOf(rng, level) {
   else whole = rngInt(rng, 4, 20)
   var answer = (whole * pct) / 100
   return question({
+    operands: [pct, whole],
     skill: "percent-of",
     levelId: level.id,
     prompt: "What is " + pct + "% of " + whole + "?",
@@ -411,6 +423,7 @@ function genOrderOps(rng, level) {
     answer = a + b * c
   }
   return question({
+    operands: [a, b, c, parens],
     skill: "order-ops",
     levelId: level.id,
     prompt: prompt,
@@ -424,6 +437,7 @@ function genNegatives(rng, level) {
   var a = rngInt(rng, 0, 9)
   var b = rngInt(rng, a + 1, a + 12)
   return question({
+    operands: [a, b],
     skill: "negatives",
     levelId: level.id,
     prompt: a + " − " + b,
@@ -463,6 +477,7 @@ function generateQuestion(levelId, rng, skill) {
   q.id = level.key + ":" + q.skill + ":" + Math.floor(rng() * 1e9)
   q.levelKey = level.key
   q.levelName = level.name
+  q.support = teachingSupport(q)
   if (q.input !== "choices") q.input = level.input
   return q
 }
@@ -477,6 +492,92 @@ function generateRound(levelId, count, seed) {
   for (var i = 0; i < n; i++) {
     var skill = level.skills[i % level.skills.length]
     items.push(generateQuestion(level.id, rng, skill))
+  }
+  return items
+}
+
+function teachingSupport(q) {
+  var o = q.operands || []
+  var hint = ""
+  var explanation = ""
+  var counters = []
+  if (q.skill === "count-to-10") {
+    hint = "Touch each light once. Say one number for each light."
+    explanation = "The last number you say tells you how many: " + q.answer + "."
+  } else if (q.skill === "compare-to-10") {
+    hint = "Match the lights in pairs. Which group has lights left over?"
+    explanation = q.answer + " is more than " + Math.min(q.left, q.right) + "."
+  } else if (q.skill.indexOf("add-within") === 0) {
+    hint = o[0] + " is your starting number. Count on " + o[1] + ", or split the numbers into tens and ones."
+    explanation = o[0] + " and " + o[1] + " together make " + q.answer + "."
+    if (q.levelId <= 2) counters = [o[0], o[1]]
+  } else if (q.skill.indexOf("sub-within") === 0) {
+    hint = "Start at " + o[0] + ". Take away " + o[1] + ". You can count back in small jumps."
+    explanation = q.answer + " + " + o[1] + " = " + o[0] + ", so " + q.answer + " are left."
+  } else if (q.skill === "missing-addend-20") {
+    hint = "Start at " + o[0] + ". Count the jumps to " + o[1] + "."
+    explanation = o[1] + " − " + o[0] + " = " + q.answer + ". That fills the box."
+  } else if (q.skill === "skip-count") {
+    hint = "Look at the jump between two neighbors. Repeat the same jump."
+    explanation = "Each jump is " + o[1] + ". Add " + o[1] + " again to get " + q.answer + "."
+  } else if (q.skill.indexOf("mul-") === 0) {
+    hint = "Think of " + o[0] + " groups of " + o[1] + ". Split a big group into smaller groups you know."
+    explanation = q.skill === "mul-2digit" ?
+      Math.floor(o[0] / 10) * 10 + " × " + o[1] + " + " + o[0] % 10 + " × " + o[1] + " = " + q.answer + "." :
+      o[0] + " equal groups of " + o[1] + " make " + q.answer + "."
+  } else if (q.skill.indexOf("div-") === 0) {
+    hint = "How many groups of " + o[1] + " fit into " + o[0] + "? Use a times fact."
+    explanation = q.answer + " × " + o[1] + " = " + o[0] + ". Division undoes multiplication."
+  } else if (q.skill === "mixed-add-sub") {
+    hint = "Addition and subtraction have the same priority. Work from left to right."
+    explanation = "First you get " + (o[3] ? o[0] + o[1] : o[0] - o[1]) + ". Then " + (o[3] ? "subtract " : "add ") + o[2] + " to get " + q.answer + "."
+  } else if (q.skill === "fraction-of") {
+    hint = "Divide " + o[2] + " into " + o[1] + " equal parts. Then take " + o[0] + " of those parts."
+    explanation = "Each part is " + o[2] / o[1] + ". " + o[0] + " of those parts make " + q.answer + "."
+  } else if (q.skill === "percent-of") {
+    var divisor = 100 / o[0]
+    hint = o[0] === 100 ? "100% means the whole amount." : o[0] + "% means 1 of " + divisor + " equal parts."
+    explanation = o[1] + " ÷ " + divisor + " = " + q.answer + "."
+  } else if (q.skill === "order-ops") {
+    hint = o[3] ? "Do the part inside the parentheses first." : "Multiply first, then add."
+    explanation = o[3] ? "The parentheses make " + (o[0] + o[1]) + ". Multiply that by " + o[2] + " to get " + q.answer + "." :
+      o[1] + " × " + o[2] + " = " + o[1] * o[2] + ". Add " + o[0] + " to get " + q.answer + "."
+  } else if (q.skill === "negatives") {
+    hint = "Move left on a number line. You can keep going past zero."
+    explanation = "From " + o[0] + ", use " + o[0] + " steps to reach zero, then " + (o[1] - o[0]) + " more to reach " + q.answer + "."
+  }
+  return { hint: hint, explanation: explanation, counters: counters }
+}
+
+function safeCount(value) {
+  return typeof value === "number" && isFinite(value) && value >= 0 ? Math.floor(value) : 0
+}
+
+function recordPracticeSkills(learner, items) {
+  items.forEach(function (item) {
+    if (!Object.prototype.hasOwnProperty.call(SKILL_GENERATORS, item.skill)) return
+    var previous = learner.practiceSkills[item.skill] || {}
+    var row = { total: safeCount(previous.total), independent: safeCount(previous.independent) }
+    row.total++
+    if (item.correct && item.attempts === 1 && !item.hintUsed) row.independent++
+    learner.practiceSkills[item.skill] = row
+  })
+}
+
+function generatePracticeRound(levelId, count, seed, learner) {
+  var items = generateRound(levelId, count, seed)
+  var level = levelById(levelId)
+  var history = learner && learner.practiceSkills || {}
+  var weakest = level.skills.slice().sort(function (a, b) {
+    var x = history[a] || {}, y = history[b] || {}
+    return (safeCount(x.independent) + 1) / (safeCount(x.total) + 2) -
+      (safeCount(y.independent) + 1) / (safeCount(y.total) + 2)
+  })[0]
+  // Keep coverage of every skill; use alternating later items for extra support.
+  if (history[weakest] && history[weakest].total > 0) {
+    var rng = createRng(Number(seed) + 7919)
+    for (var i = level.skills.length; i < items.length; i += 2)
+      items[i] = generateQuestion(level.id, rng, weakest)
   }
   return items
 }
@@ -573,8 +674,8 @@ function normalizeProgress(raw) {
   } catch (e) {
     return emptyProgress()
   }
-  if (!data || typeof data !== "object") return emptyProgress()
-  if (!data.learners || typeof data.learners !== "object") data.learners = {}
+  if (!data || typeof data !== "object" || Array.isArray(data)) return emptyProgress()
+  if (!data.learners || typeof data.learners !== "object" || Array.isArray(data.learners)) data.learners = {}
   if (data.schemaVersion !== 1) data.schemaVersion = 1
   if (data.lastAssessment === undefined) data.lastAssessment = null
   return data
@@ -583,33 +684,70 @@ function normalizeProgress(raw) {
 function learnerRecord(progress, learnerId) {
   var id = String(learnerId || "default")
   var data = progress || emptyProgress()
-  if (!data.learners[id]) {
-    data.learners[id] = {
-      preferredLevel: 1,
-      lastPlayedAt: "",
-      rounds: 0,
-      bestStreak: 0,
-      byLevel: {}
-    }
+  if (!data.learners || typeof data.learners !== "object" || Array.isArray(data.learners)) data.learners = {}
+  if (!Object.prototype.hasOwnProperty.call(data.learners, id) || !data.learners[id] ||
+      typeof data.learners[id] !== "object" || Array.isArray(data.learners[id])) {
+    Object.defineProperty(data.learners, id, { value: {}, enumerable: true, writable: true, configurable: true })
   }
+  var learner = data.learners[id]
+  learner.preferredLevel = clampLevelId(learner.preferredLevel || 1)
+  learner.rounds = safeCount(learner.rounds)
+  learner.bestStreak = safeCount(learner.bestStreak)
+  if (typeof learner.lastPlayedAt !== "string") learner.lastPlayedAt = ""
+  if (!learner.byLevel || typeof learner.byLevel !== "object" || Array.isArray(learner.byLevel)) learner.byLevel = {}
+  if (!learner.practiceSkills || typeof learner.practiceSkills !== "object" || Array.isArray(learner.practiceSkills)) learner.practiceSkills = {}
+  if (!Array.isArray(learner.notebook)) learner.notebook = []
   return data.learners[id]
 }
 
 function recordRound(progress, learnerId, levelId, correct, total, streak) {
   var data = normalizeProgress(progress)
+  if (!(total > 0)) return data
   var learner = learnerRecord(data, learnerId)
   var id = clampLevelId(levelId)
   learner.lastPlayedAt = new Date().toISOString()
   learner.rounds++
   if (streak > (learner.bestStreak || 0)) learner.bestStreak = streak
   if (!learner.byLevel[id]) learner.byLevel[id] = { rounds: 0, correct: 0, total: 0 }
-  learner.byLevel[id].rounds++
-  learner.byLevel[id].correct += correct
-  learner.byLevel[id].total += total
+  learner.byLevel[id].rounds = safeCount(learner.byLevel[id].rounds) + 1
+  learner.byLevel[id].correct = safeCount(learner.byLevel[id].correct) + correct
+  learner.byLevel[id].total = safeCount(learner.byLevel[id].total) + total
   var acc = total > 0 ? correct / total : 0
   if (acc >= 0.85 && id < 6) learner.preferredLevel = id + 1
   else if (acc <= 0.4 && id > 1) learner.preferredLevel = id - 1
   else learner.preferredLevel = id
+  return data
+}
+
+function recordSession(progress, result, bestStreak) {
+  var data = normalizeProgress(progress)
+  if (!result || !result.total) return data
+  var learner = learnerRecord(data, result.learnerId)
+  learner.lastPlayedAt = result.finishedAt
+  learner.bestStreak = Math.max(learner.bestStreak, bestStreak || 0)
+  if (result.status === "complete") learner.rounds++
+  var visited = {}
+  result.items.forEach(function (item) {
+    var id = clampLevelId(item.levelId)
+    var old = learner.byLevel[id] || {}
+    var row = { rounds: safeCount(old.rounds), correct: safeCount(old.correct), total: safeCount(old.total) }
+    row.total++
+    if (item.correct) row.correct++
+    if (!visited[id] && result.status === "complete") row.rounds++
+    visited[id] = true
+    learner.byLevel[id] = row
+  })
+  if (result.mode === "assessment") {
+    data.lastAssessment = result
+    if (result.status === "complete") learner.preferredLevel = result.recommendedLevel
+  } else {
+    recordPracticeSkills(learner, result.items)
+    // A retry or a hint is useful learning, but isn't evidence for promotion.
+    if (result.status === "complete" && result.total >= 3) {
+      var independent = result.independentCorrect / result.total
+      learner.preferredLevel = clampLevelId(result.level + (independent >= 0.85 ? 1 : result.accuracy <= 0.4 ? -1 : 0))
+    }
+  }
   return data
 }
 
@@ -682,6 +820,7 @@ function buildResult(session) {
     total: total,
     correct: correct,
     accuracy: Math.round(acc * 1000) / 1000,
+    independentCorrect: items.filter(function (item) { return item.correct && (item.attempts || 1) === 1 && !item.hintUsed }).length,
     avgMs: total ? Math.round(totalMs / total) : 0,
     recommendedLevel: recommended,
     skillScores: skillScores(items),
@@ -707,6 +846,8 @@ if (typeof module !== "undefined") {
     rngInt: rngInt,
     generateQuestion: generateQuestion,
     generateRound: generateRound,
+    generatePracticeRound: generatePracticeRound,
+    recordPracticeSkills: recordPracticeSkills,
     parseResponse: parseResponse,
     grade: grade,
     skillScores: skillScores,
@@ -718,6 +859,7 @@ if (typeof module !== "undefined") {
     normalizeProgress: normalizeProgress,
     learnerRecord: learnerRecord,
     recordRound: recordRound,
+    recordSession: recordSession,
     parsePayload: parsePayload,
     buildResult: buildResult,
     catalogJson: catalogJson

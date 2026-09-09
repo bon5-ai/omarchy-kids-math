@@ -1,8 +1,8 @@
 # Kids Math
 
-A fullscreen [Omarchy](https://omarchy.org) overlay for Omarchy Kids: short,
-leveled math practice for ages 5–12, plus a JSON assessment contract the
-Kids AI Tutor can use for an initial aptitude check.
+A fullscreen [Omarchy](https://omarchy.org) overlay for Omarchy Kids: a playful
+Number Lab, supported math practice for ages 5–12, and a JSON assessment
+contract the Kids AI Tutor can use for an initial aptitude check.
 
 This is a standalone shell plugin (`omarchykids.math`). It is **not** the
 AI Tutor. Development also lives under `plugins/math` in
@@ -15,6 +15,27 @@ active theme tokens, and does not start a second Quickshell process.
 packages, network calls, or install hooks. Progress is stored in
 `~/.local/state/omarchy/kids-math.json` and is not written unless the child
 plays. License: MIT.
+
+## Screenshots
+
+Captured from the running QML interface in the Qt test harness with a sample
+theme and mocked shell services. Colors follow your active Omarchy theme.
+
+### Home
+
+![Kids Math home screen with Number Lab, practice, skill check, and level selection](docs/screenshots/home.png)
+
+### Interactive fractions
+
+![Fraction fountain with adjustable numbers and a visual model of two quarters of 24](docs/screenshots/lab-fraction.png)
+
+### Mystery machine
+
+![Mystery machine showing three input and output clues and asking the child to predict the next output](docs/screenshots/lab-mystery.png)
+
+### Saved inventions
+
+![Invention book with saved puzzles to reopen and a field for entering a shared puzzle code](docs/screenshots/notebook.png)
 
 ## Install
 
@@ -42,16 +63,48 @@ omarchy plugin list | grep omarchykids.math
 omarchy-shell shell toggle omarchykids.math
 ```
 
-**Practice** runs 10 questions at the current level. Younger levels use large
-multiple-choice buttons; older levels use a number pad. A first miss can be
-retried; a second miss shows the answer.
+**Number Lab** lets children invent answers with live number dials. Every build
+puzzle has multiple solutions: rearrange counting lights, keep a difference
+unchanged, build arrays, or find equivalent fractional amounts. **Solve a
+mystery** asks children to infer a machine's rule from three input/output clues.
+Both activities follow the selected level; every level is available immediately.
 
-**Check my skills** runs a 12-question adaptive mix. It does not reveal
-answers. The child sees encouragement; scores are written for parents and the
-tutor, not as a report-card overlay.
+Save successful builds and solved mysteries in the **invention book**. Open one
+to experiment again, or give someone its `LAB1-…` puzzle code so they can try the
+same challenge on their device. Codes contain only a recipe version, level, seed,
+and activity type. They work offline and contain no learner data. The book keeps
+the latest 60 distinct inventions per learner.
+
+**Practice** runs 10 questions at the current level. Younger levels use large
+multiple-choice buttons; older levels use a number pad. **Give me an idea** offers
+a strategy; a first miss opens the strategy automatically. A second miss reveals
+and explains the answer. Correct answers also get an explanation. Press **Next**
+when ready; practice never races ahead of a child reading or thinking.
+
+Later practice rounds give extra attention to skills needing support while
+keeping coverage of every skill in the chosen level. Helped answers are recorded
+separately from independent success when choosing the next preferred level.
+
+**Check my skills** runs a 12-question adaptive mix. It shows the same neutral
+feedback after every answer and does not offer hints or reveal correctness. The
+child sees encouragement; scores are written for parents and the tutor, not as a
+report-card overlay.
 
 Escape goes back a screen. During a skill check, Escape saves a partial result
-so a waiting tutor is not left hanging.
+so a waiting tutor is not left hanging. An empty check returns an abandoned
+result over IPC without writing progress. An abandoned check does not change the
+preferred level or count as a completed round.
+
+Tab / Shift+Tab move between buttons; Enter or Space activates them. In practice,
+H opens an idea, arrows select an answer, and 1–4 submit the corresponding choice.
+For the number pad, type digits, Backspace to erase, and minus to change the sign.
+The card scrolls on smaller displays and follows keyboard focus. Close stays
+visible. Counting lights can be touched one at a time during practice.
+
+There are no timers to beat, daily obligations, leaderboards, or purchases.
+Finding a second solution and finishing a practice round are natural stopping
+points. Beginning readers may still need an adult to read instructions; built-in
+narration is not included.
 
 ### Menu
 
@@ -90,7 +143,7 @@ away.
 | 6 | Parts & percents | 10–12 | Fraction of a whole, percent of, order of ops, negatives |
 
 Progress lives in `~/.local/state/omarchy/kids-math.json` (preferred level,
-round counts). Removing the plugin does not delete that file.
+round counts, skill practice history, and saved inventions). Removing the plugin does not delete that file.
 
 ## AI Tutor contract
 
@@ -145,6 +198,7 @@ Result shape:
   "total": 12,
   "correct": 9,
   "accuracy": 0.75,
+  "independentCorrect": 9,
   "avgMs": 4200,
   "recommendedLevel": 3,
   "skillScores": { "add-within-100": { "correct": 3, "total": 4 } },
@@ -152,7 +206,15 @@ Result shape:
 }
 ```
 
-`status` is `complete` or `abandoned`. `recommendedLevel` is the highest band
+`status` is `complete` or `abandoned`. Schema 1 remains compatible; the additive
+`independentCorrect` field counts correct answers given on the first attempt
+without a hint. Each recorded item also includes `attempts` and `hintUsed`.
+`correct` retains its meaning of eventual correctness. `lastAssessment` in the
+progress file is updated only by non-empty assessments. Adaptive item statistics
+are attributed to the level of each item. Lab discoveries do not enter assessment
+scores or count as practice rounds.
+
+For assessments, `recommendedLevel` is the highest band
 with at least three items at ≥ 70% correct. Sister plugins can emit the same
 `schemaVersion` / `skillScores` / `recommendedLevel` shape so the tutor can
 stitch one aptitude snapshot.
@@ -170,16 +232,34 @@ omarchy-shell shell call omarchykids.math learnerProgress '{}'
 ```sh
 omarchy plugin validate .
 node tests/math-engine-test.js
+node tests/lab-engine-test.js
 ```
 
 If Omarchy is installed, also:
 
 ```sh
-qmllint -I "$OMARCHY_PATH/shell" Overlay.qml BarWidget.qml
+qmllint -I "$OMARCHY_PATH/shell" Overlay.qml BarWidget.qml LabView.qml MathButton.qml CounterField.qml
 omarchy-shell shell rescanPlugins
 ```
 
-Question generation is in `MathEngine.js` so Node can test it without QML.
+`MathEngine.js` and `LabEngine.js` are shared by QML and Node. Tests exercise
+all skills, thousands of generated puzzles, persistence, and assessment isolation.
+
+An optional Qt smoke suite runs the actual QML with in-memory shell services:
+
+```sh
+uv venv /tmp/kids-math-qt
+uv pip install --python /tmp/kids-math-qt/bin/python 'PySide6==6.11.2'
+/tmp/kids-math-qt/bin/python tests/qml-smoke.py
+# Optionally render screenshots outside the repository:
+/tmp/kids-math-qt/bin/python tests/qml-smoke.py --screenshots /tmp/kids-math-screenshots
+```
+
+PySide6 is only a development dependency. This suite checks timers, repeated
+input, keyboard navigation, small-screen scrolling, and saved-invention replay.
+It does not replace a live Omarchy check of Wayland focus, theme tokens, or
+Quickshell FileView persistence. See [EVALUATION.md](EVALUATION.md) for the design
+assessment, research rationale, and remaining product gaps.
 
 ## Remove
 
