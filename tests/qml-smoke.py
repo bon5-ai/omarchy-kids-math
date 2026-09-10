@@ -9,6 +9,7 @@ import argparse
 import os
 from pathlib import Path
 import tempfile
+import shutil
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QSG_RHI_BACKEND", "software")
@@ -31,6 +32,7 @@ qInstallMessageHandler(log)
 
 with tempfile.TemporaryDirectory(prefix="kids-math-qml-") as directory:
     base = Path(directory)
+    shutil.copytree(repo / "garden" / "assets", base / "garden" / "assets")
     for source in list(repo.glob("*.qml")) + list(repo.glob("*.js")):
         content = source.read_text()
         if source.name == "Overlay.qml":
@@ -147,6 +149,9 @@ QtObject {
     progress = root.findChild(QObject, "progressFile")
     assert progress.property("writes") == 0
     screenshot("home")
+    check('root.gardenUrl("ten").indexOf("garden/index.html#learner=default&level=1&activity=ten") >= 0', "garden launches the bundled local page with learner, range and activity")
+    js('root.learnerId = "a&b #c"; root.levelId = 6')
+    check('root.gardenUrl("join").indexOf("learner=a%26b%20%23c&level=3&activity=join") >= 0', "garden URL safely encodes learner IDs and caps the range")
 
     js('root.open(JSON.stringify({mode:"assessment", input:"keypad", level:3, count:3, seed:42, adaptive:false}))')
     js('root.typed = String(root.currentQuestion.answer + 1); root.submitCurrent(); root.submitCurrent()')

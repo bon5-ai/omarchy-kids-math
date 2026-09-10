@@ -50,6 +50,7 @@ Item {
   property real seed: 1
   property var rng: null
   property string overrideInput: ""
+  property string gardenError: ""
   property var keypadLabels: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "−", "0", "⌫"]
 
   property color background: Color.menu.background
@@ -63,8 +64,8 @@ Item {
   readonly property int cornerRadius: Style.cornerRadius
   property string fontFamily: Style.font.menuFamily
   property int contentMargin: Style.spacing.panelPadding
-  property int cardWidth: Math.min(Style.space(920), panel.width - Style.gapsOut * 2)
-  property int cardHeight: Math.min(Style.space(740), panel.height - Style.gapsOut * 2)
+  property int cardWidth: Math.min(Style.space(1080), panel.width - Style.gapsOut * 2)
+  property int cardHeight: Math.min(Style.space(820), panel.height - Style.gapsOut * 2)
 
   readonly property var currentLevel: MathEngine.levelById(root.levelId)
   readonly property bool usingChoices: {
@@ -138,6 +139,21 @@ Item {
 
   function catalog() {
     return MathEngine.catalogJson()
+  }
+
+  function gardenUrl(activity) {
+    return Qt.resolvedUrl("garden/index.html").toString()
+      + "#learner=" + encodeURIComponent(root.learnerId)
+      + "&level=" + Math.min(3, root.levelId)
+      + "&activity=" + encodeURIComponent(activity || "")
+  }
+
+  function launchGarden(activity) {
+    root.gardenError = ""
+    if (Qt.openUrlExternally(root.gardenUrl(activity)))
+      root.dismiss()
+    else
+      root.gardenError = "The browser could not open. You can still use practice and the Number Lab below."
   }
 
   function learnerProgress() {
@@ -567,7 +583,7 @@ Item {
 
           Text {
             width: parent.width - closeBtn.width - parent.spacing
-            text: root.screen === "levels" ? "Pick a level" : (root.screen === "play" ? root.currentLevel.name : root.screen === "lab" ? "Number Lab" : "Math · make a discovery")
+            text: root.screen === "levels" ? "Pick a level" : (root.screen === "play" ? root.currentLevel.name : root.screen === "lab" ? "Number Lab" : "Math Garden · room to grow")
             color: root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.heading
@@ -614,19 +630,24 @@ Item {
               spacing: Style.spacing.md
               visible: root.screen === "home"
 
+              GardenHome {
+                width: parent.width
+                onLaunchRequested: function (activity) { root.launchGarden(activity) }
+              }
+
               Text {
                 width: parent.width
-                text: "Invent, experiment, and find your own way with numbers."
+                visible: root.gardenError !== ""
+                text: root.gardenError
                 color: root.foreground
-                opacity: 0.78
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.title
+                font.pixelSize: Style.font.body
                 wrapMode: Text.WordWrap
               }
 
               Text {
                 width: parent.width
-                text: "Level " + root.currentLevel.id + " · " + root.currentLevel.name
+                text: "More ways to explore · Level " + root.currentLevel.id + " · " + root.currentLevel.name
                 color: root.foreground
                 opacity: 0.7
                 font.family: root.fontFamily
@@ -636,7 +657,6 @@ Item {
 
               MathButton {
                 width: parent.width
-                primary: true
                 label: "Number Lab"
                 hint: "Build a number. Crack a mystery. Save an invention."
                 onTapped: root.screen = "lab"

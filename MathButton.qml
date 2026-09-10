@@ -7,10 +7,11 @@ Rectangle {
   property string hint: ""
   property bool primary: false
   property bool active: false
+  property int topContentHeight: 0
   signal tapped
   // Qt already excludes hidden and disabled items from the tab chain.
   activeFocusOnTab: true
-  implicitHeight: Math.max(Style.space(52), copy.implicitHeight + Style.space(24))
+  implicitHeight: Math.max(Style.space(52), topContentHeight + copy.implicitHeight + Style.space(24))
   radius: Style.cornerRadius
   color: primary || active || mouse.containsMouse ? Color.menu.selectedBackground : "transparent"
   border.width: activeFocus ? Math.max(2, Style.space(3)) : Style.normalBorderWidth
@@ -48,7 +49,8 @@ Rectangle {
   }
   Column {
     id: copy
-    anchors.centerIn: parent
+    anchors.horizontalCenter: parent.horizontalCenter
+    y: control.topContentHeight + (control.height - control.topContentHeight - implicitHeight) / 2
     width: parent.width - Style.space(24)
     spacing: Style.spacing.labelGap
     Text {

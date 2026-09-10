@@ -1,8 +1,9 @@
 # Kids Math
 
-A fullscreen [Omarchy](https://omarchy.org) overlay for Omarchy Kids: a playful
-Number Lab, supported math practice for ages 5–12, and a JSON assessment
-contract the Kids AI Tutor can use for an initial aptitude check.
+A fullscreen [Omarchy](https://omarchy.org) overlay for Omarchy Kids: a
+picture-led Math Garden for ages 5–8, a playful Number Lab, supported math
+practice for ages 5–12, and a JSON assessment contract the Kids AI Tutor can
+use for an initial aptitude check.
 
 This is a standalone shell plugin (`omarchykids.math`). It is **not** the
 AI Tutor. Development also lives under `plugins/math` in
@@ -14,7 +15,11 @@ active theme tokens, and does not start a second Quickshell process.
 **Dependencies:** Omarchy Quattro (`omarchy-shell` / Quickshell). No extra
 packages, network calls, or install hooks. Progress is stored in
 `~/.local/state/omarchy/kids-math.json` and is not written unless the child
-plays. License: MIT.
+plays. The Math Garden is a bundled local web page opened in the default
+browser; it ships its own copy of [three.js](https://threejs.org) (MIT, see
+`garden/THREE-LICENSE.txt`) and the Nunito font (OFL, see
+`garden/assets/NUNITO-LICENSE.txt`), loads nothing from the network, and keeps
+its practice observations in that browser's local storage. License: MIT.
 
 ## Screenshots
 
@@ -23,7 +28,7 @@ theme and mocked shell services. Colors follow your active Omarchy theme.
 
 ### Home
 
-![Kids Math home screen with Number Lab, practice, skill check, and level selection](docs/screenshots/home.png)
+![Kids Math home screen with the Math Garden banner, four picture activity cards, and Number Lab](docs/screenshots/home.png)
 
 ### Interactive fractions
 
@@ -62,6 +67,28 @@ omarchy plugin list | grep omarchykids.math
 ```sh
 omarchy-shell shell toggle omarchykids.math
 ```
+
+**Math Garden** is for the youngest children (ages 5–8). Its four picture
+activities — apple orchard (count one by one), frog pond (add and take away),
+make-ten meadow (find the missing part), and tiny town (tens and ones) — open
+as a local web page in the default browser, so it can show animated,
+touchable objects with a large, readable layout. The overlay closes when the
+garden opens; the shell plugin itself stays loaded. Every object is a real
+button: click, touch, or use Tab, Enter and Space. **Show me** acts out a
+picture step by step; **Listen** reads the question aloud with a locally
+installed English voice when one exists; **For grown-ups** offers a comfortable
+starting range and a plain table of what has been explored. A visit is five
+small discoveries, then a natural stopping point. Everything is bundled and
+served from the plugin folder: no network access, no account, and a strict
+content security policy. If WebGL is unavailable, the same picture counters
+appear as plain HTML. If the browser blocks storage, the visit still works and
+observations last only for that visit. The garden respects the system
+reduced-motion preference and has its own animation toggle.
+
+The shell launches the garden with the current learner ID and a range capped
+at level 3 (`garden/index.html#learner=…&level=…&activity=…`). Garden
+observations are separate from shell practice, do not enter tutor skill
+checks, and are not written to `kids-math.json`.
 
 **Number Lab** lets children invent answers with live number dials. Every build
 puzzle has multiple solutions: rearrange counting lights, keep a difference
@@ -103,8 +130,9 @@ visible. Counting lights can be touched one at a time during practice.
 
 There are no timers to beat, daily obligations, leaderboards, or purchases.
 Finding a second solution and finishing a practice round are natural stopping
-points. Beginning readers may still need an adult to read instructions; built-in
-narration is not included.
+points. Beginning readers may still need an adult to read instructions in the shell
+overlay; spoken instructions are available only in the Math Garden, and only
+when the browser has a local English voice.
 
 ### Menu
 
@@ -143,7 +171,10 @@ away.
 | 6 | Parts & percents | 10–12 | Fraction of a whole, percent of, order of ops, negatives |
 
 Progress lives in `~/.local/state/omarchy/kids-math.json` (preferred level,
-round counts, skill practice history, and saved inventions). Removing the plugin does not delete that file.
+round counts, skill practice history, and saved inventions). Removing the plugin
+does not delete that file. Math Garden observations live in the browser's local
+storage under `kids-math-garden:v1:<learner>` and are cleared by clearing site
+data for the plugin's `file://` origin.
 
 ## AI Tutor contract
 
@@ -233,17 +264,39 @@ omarchy-shell shell call omarchykids.math learnerProgress '{}'
 omarchy plugin validate .
 node tests/math-engine-test.js
 node tests/lab-engine-test.js
+node --test tests/garden-engine-test.js
 ```
 
 If Omarchy is installed, also:
 
 ```sh
-qmllint -I "$OMARCHY_PATH/shell" Overlay.qml BarWidget.qml LabView.qml MathButton.qml CounterField.qml
+qmllint -I "$OMARCHY_PATH/shell" Overlay.qml BarWidget.qml LabView.qml MathButton.qml CounterField.qml GardenHome.qml
 omarchy-shell shell rescanPlugins
 ```
 
 `MathEngine.js` and `LabEngine.js` are shared by QML and Node. Tests exercise
 all skills, thousands of generated puzzles, persistence, and assessment isolation.
+
+### Math Garden
+
+The garden source is `garden/src/` (`lessons.js` holds the pure lesson and
+session logic, `scene.js` the three.js picture, `app.js` the page). The shell
+loads the committed bundle `garden/garden.js`, so rebuild it after editing
+`garden/src/`:
+
+```sh
+npm install
+npm run build          # esbuild → garden/garden.js, copies the three.js license
+npm test               # engine tests, including garden/src/lessons.js
+npm run test:browser   # Playwright: offline load, one-to-one counting, conservation,
+                       # reduced motion, learner isolation, no-WebGL and no-storage
+                       # fallbacks, small screens
+npm run preview        # optional local preview of garden/ on 127.0.0.1:4173
+```
+
+`npm` is a development dependency only. Installed plugins ship the built
+bundle, `node_modules/` is ignored, and nothing runs `npm` at install or play
+time. Illustrations in `garden/assets/` are original, generated for this plugin.
 
 An optional Qt smoke suite runs the actual QML with in-memory shell services:
 
