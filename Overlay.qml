@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Ui
 import "MathEngine.js" as MathEngine
 import "LabEngine.js" as Lab
+import "GardenEngine.js" as Garden
 
 Item {
   id: root
@@ -50,7 +51,7 @@ Item {
   property real seed: 1
   property var rng: null
   property string overrideInput: ""
-  property string gardenError: ""
+  property string gardenActivity: ""
   property var keypadLabels: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "−", "0", "⌫"]
 
   property color background: Color.menu.background
@@ -64,7 +65,7 @@ Item {
   readonly property int cornerRadius: Style.cornerRadius
   property string fontFamily: Style.font.menuFamily
   property int contentMargin: Style.spacing.panelPadding
-  property int cardWidth: Math.min(Style.space(1080), panel.width - Style.gapsOut * 2)
+  property int cardWidth: Math.min(Style.space(root.screen === "garden" ? 1240 : 1080), panel.width - Style.gapsOut * 2)
   property int cardHeight: Math.min(Style.space(820), panel.height - Style.gapsOut * 2)
 
   readonly property var currentLevel: MathEngine.levelById(root.levelId)
@@ -81,6 +82,7 @@ Item {
   }
 
   function open(payloadJson) {
+    root.screen = "home"
     if (root.sessionOpen && root.mode === "assessment")
       root.finishSession("abandoned")
     advanceTimer.stop()
@@ -113,6 +115,7 @@ Item {
   }
 
   function close() {
+    if (gardenLoader.item) gardenLoader.item.stop()
     if (root.sessionOpen && root.mode === "assessment")
       root.finishSession("abandoned")
     advanceTimer.stop()
@@ -141,19 +144,16 @@ Item {
     return MathEngine.catalogJson()
   }
 
-  function gardenUrl(activity) {
-    return Qt.resolvedUrl("garden/index.html").toString()
-      + "#learner=" + encodeURIComponent(root.learnerId)
-      + "&level=" + Math.min(3, root.levelId)
-      + "&activity=" + encodeURIComponent(activity || "")
+  function launchGarden(activity) {
+    root.gardenActivity = activity || ""
+    root.screen = "garden"
   }
 
-  function launchGarden(activity) {
-    root.gardenError = ""
-    if (Qt.openUrlExternally(root.gardenUrl(activity)))
-      root.dismiss()
-    else
-      root.gardenError = "The browser could not open. You can still use practice and the Number Lab below."
+  function saveGarden(value) {
+    var learner = MathEngine.learnerRecord(root.progress, root.learnerId)
+    learner.garden = Garden.loadProgress(value)
+    root.progress = MathEngine.normalizeProgress(JSON.stringify(root.progress))
+    root.saveProgress()
   }
 
   function learnerProgress() {
@@ -387,7 +387,9 @@ Item {
       return
     }
     if (event.key === Qt.Key_Escape) {
-      if (root.screen === "play" && root.mode === "assessment") {
+      if (root.screen === "garden" && gardenLoader.item) {
+        gardenLoader.item.back()
+      } else if (root.screen === "play" && root.mode === "assessment") {
         root.finishSession("abandoned")
       } else if (root.screen === "play") {
         advanceTimer.stop()
@@ -637,16 +639,6 @@ Item {
 
               Text {
                 width: parent.width
-                visible: root.gardenError !== ""
-                text: root.gardenError
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: Text.WordWrap
-              }
-
-              Text {
-                width: parent.width
                 text: "More ways to explore · Level " + root.currentLevel.id + " · " + root.currentLevel.name
                 color: root.foreground
                 opacity: 0.7
@@ -687,6 +679,29 @@ Item {
                 label: "Change level"
                 hint: "Ages 5–12, from counting to percents"
                 onTapped: root.screen = "levels"
+              }
+            }
+
+            Loader {
+              id: gardenLoader
+              width: parent.width
+              active: root.opened && root.screen === "garden"
+              visible: active
+              sourceComponent: Component {
+                GardenView {
+                  initialActivity: root.gardenActivity
+                  levelId: {
+                    var saved = MathEngine.learnerRecord(root.progress, root.learnerId).garden
+                    return saved ? Garden.loadProgress(saved).level : Math.min(3, root.levelId)
+                  }
+                  progress: Garden.loadProgress(MathEngine.learnerRecord(root.progress, root.learnerId).garden)
+                  onSaved: function(value) { root.saveGarden(value) }
+                  onHomeRequested: root.screen = "home"
+                  onNavigated: {
+                    viewport.contentY = 0
+                    Qt.callLater(function() { keyboardAnchor.forceActiveFocus() })
+                  }
+                }
               }
             }
 

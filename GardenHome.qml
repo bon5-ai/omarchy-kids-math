@@ -1,9 +1,11 @@
 import QtQuick
 import qs.Commons
+import "GardenEngine.js" as Garden
 
 Column {
   id: garden
   spacing: Style.spacing.md
+  property bool insideGarden: false
   signal launchRequested(string activity)
 
   Rectangle {
@@ -62,7 +64,8 @@ Column {
     width: parent.width
     primary: true
     label: "Explore Math Garden →"
-    hint: "Picture adventures for ages 5–8 · opens in your browser"
+    visible: !garden.insideGarden
+    hint: "Picture adventures for ages 5–8 · touch, count, discover"
     onTapped: garden.launchRequested("")
   }
 
@@ -112,5 +115,39 @@ Column {
     font.pixelSize: Style.font.bodySmall
     wrapMode: Text.WordWrap
     horizontalAlignment: Text.AlignHCenter
+  }
+
+  Text {
+    width: parent.width
+    text: "The Discovery Trail"
+    color: Color.menu.text
+    font.family: Style.font.menuFamily
+    font.pixelSize: Style.font.heading
+    font.bold: true
+  }
+  Text {
+    width: parent.width
+    text: "Seven stepping stones from number patterns to shapes, graphs, and change. Start wherever curiosity takes you."
+    color: Color.menu.text
+    opacity: 0.8
+    font.family: Style.font.menuFamily
+    font.pixelSize: Style.font.body
+    wrapMode: Text.WordWrap
+  }
+  Grid {
+    id: trail
+    width: parent.width
+    columns: width < Style.space(580) ? 1 : width < Style.space(900) ? 2 : 3
+    spacing: Style.space(12)
+    Repeater {
+      model: Garden.activities().filter(function(a) { return a.trail })
+      MathButton {
+        required property var modelData
+        width: (trail.width - (trail.columns - 1) * trail.spacing) / trail.columns
+        label: modelData.trail + " · " + modelData.title
+        hint: modelData.skill
+        onTapped: garden.launchRequested(modelData.id)
+      }
+    }
   }
 }

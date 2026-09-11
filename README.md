@@ -1,9 +1,9 @@
 # Kids Math
 
 A fullscreen [Omarchy](https://omarchy.org) overlay for Omarchy Kids: a
-picture-led Math Garden for ages 5–8, a playful Number Lab, supported math
-practice for ages 5–12, and a JSON assessment contract the Kids AI Tutor can
-use for an initial aptitude check.
+native 3D Math Garden for ages 5–8, a seven-level Discovery Trail introducing
+patterns, geometry and rates of change, a playful Number Lab, supported math
+practice for ages 5–12, and a JSON assessment contract for the Kids AI Tutor.
 
 This is a standalone shell plugin (`omarchykids.math`). It is **not** the
 AI Tutor. Development also lives under `plugins/math` in
@@ -12,23 +12,60 @@ AI Tutor. Development also lives under `plugins/math` in
 It follows the Quattro plugin contract (`overlay` + `bar-widget`), uses the
 active theme tokens, and does not start a second Quickshell process.
 
-**Dependencies:** Omarchy Quattro (`omarchy-shell` / Quickshell). No extra
-packages, network calls, or install hooks. Progress is stored in
-`~/.local/state/omarchy/kids-math.json` and is not written unless the child
-plays. The Math Garden is a bundled local web page opened in the default
-browser; it ships its own copy of [three.js](https://threejs.org) (MIT, see
-`garden/THREE-LICENSE.txt`) and the Nunito font (OFL, see
-`garden/assets/NUNITO-LICENSE.txt`), loads nothing from the network, and keeps
-its practice observations in that browser's local storage. License: MIT.
+**Dependencies:** Omarchy Quattro (`omarchy-shell` / Quickshell), with
+[`qt6-quick3d`](https://archlinux.org/packages/extra/x86_64/qt6-quick3d/) for
+3D objects. The garden stays inside the existing overlay. It uses native QML
+picture counters if the 3D module is absent or Qt uses its software scene graph.
+Optional narration uses Qt TextToSpeech and a local English voice. Everything
+works offline, with no account, browser, web server, Node runtime or install hooks.
+Progress and garden settings live in `~/.local/state/omarchy/kids-math.json`;
+opening the plugin does not write that file. License: MIT.
 
 ## Screenshots
 
-Captured from the running QML interface in the Qt test harness with a sample
-theme and mocked shell services. Colors follow your active Omarchy theme.
+Captured from the running QML interface with Qt Quick 3D on Mesa OpenGL and
+mocked shell services. Interface colors follow the active Omarchy theme;
+the counting pictures use a consistent, readable garden palette.
 
 ### Home
 
-![Kids Math home screen with the Math Garden banner, four picture activity cards, and Number Lab](docs/screenshots/home.png)
+![Kids Math home screen with the Math Garden banner and native activity cards](docs/screenshots/home.png)
+
+### Native counting garden
+
+![Interactive Qt Quick 3D apples inside the Math Garden overlay](docs/screenshots/garden-count.png)
+
+### Frog pond
+
+Golden frogs hop into the group so children can see how addition joins quantities.
+
+![Three teal frogs joined by two golden frogs in the native 3D pond](docs/screenshots/garden-join.png)
+
+### Make-ten meadow
+
+Plant and remove flowers in a ten-frame to explore the missing part of ten.
+
+![A ten-frame with six purple flowers, one planted golden flower, and three empty spaces](docs/screenshots/garden-ten.png)
+
+### Prime builders
+
+Change the row count and look for complete rectangles. Seven blocks leave a gap
+when arranged in two rows, prompting children to explore its possible factors.
+
+![Seven 3D blocks arranged in two rows with a gap in the final column](docs/screenshots/trail-primes.png)
+
+### Power steps
+
+Grow a group through repeated multiplication. Here, two doubling steps have
+turned one block into four, with one more step to explore.
+
+![Four visible blocks after two doubling steps toward two cubed](docs/screenshots/trail-powers.png)
+
+### Geometry and change
+
+![An interactive angle experiment with a quarter-turn](docs/screenshots/trail-angles.png)
+
+![Slope experiment showing horizontal steps and their matching vertical rise](docs/screenshots/trail-slope.png)
 
 ### Interactive fractions
 
@@ -43,6 +80,14 @@ theme and mocked shell services. Colors follow your active Omarchy theme.
 ![Invention book with saved puzzles to reopen and a field for entering a shared puzzle code](docs/screenshots/notebook.png)
 
 ## Install
+
+For 3D rendering on Omarchy, install the Qt module once:
+
+```sh
+sudo pacman -S --needed qt6-quick3d
+```
+
+Then install the plugin:
 
 ```sh
 omarchy plugin add https://github.com/mikeg0/omarchy-kids-math.git --enable
@@ -68,27 +113,46 @@ omarchy plugin list | grep omarchykids.math
 omarchy-shell shell toggle omarchykids.math
 ```
 
-**Math Garden** is for the youngest children (ages 5–8). Its four picture
-activities — apple orchard (count one by one), frog pond (add and take away),
-make-ten meadow (find the missing part), and tiny town (tens and ones) — open
-as a local web page in the default browser, so it can show animated,
-touchable objects with a large, readable layout. The overlay closes when the
-garden opens; the shell plugin itself stays loaded. Every object is a real
-button: click, touch, or use Tab, Enter and Space. **Show me** acts out a
-picture step by step; **Listen** reads the question aloud with a locally
-installed English voice when one exists; **For grown-ups** offers a comfortable
-starting range and a plain table of what has been explored. A visit is five
-small discoveries, then a natural stopping point. Everything is bundled and
-served from the plugin folder: no network access, no account, and a strict
-content security policy. If WebGL is unavailable, the same picture counters
-appear as plain HTML. If the browser blocks storage, the visit still works and
-observations last only for that visit. The garden respects the system
-reduced-motion preference and has its own animation toggle.
+**Math Garden** starts with four picture activities for ages 5–8: count apples,
+join or take away frogs, fill a ten-frame, and explore towers of tens and loose
+ones. These are native Qt Quick 3D objects within the shell overlay. Every
+counting object has a QML button for touch, mouse, Tab, Enter and Space; the
+same interaction model drives the 2D fallback. No browser window opens.
 
-The shell launches the garden with the current learner ID and a range capped
-at level 3 (`garden/index.html#learner=…&level=…&activity=…`). Garden
-observations are separate from shell practice, do not enter tutor skill
-checks, and are not written to `kids-math.json`.
+**Show me** demonstrates one step at a time. **Motion: gentle** turns off hops
+and animated movement and advances demonstrations with deliberate presses.
+**Listen** reads the question and teaching steps using Qt TextToSpeech's local
+`speechd` or `espeak` engine when an English voice is available. Without it,
+the activity remains playable and suggests reading together. Install `qt6-speech`
+and configure a local speech engine if narration is wanted.
+
+**For grown-ups** selects one of three ranges and shows explored activities
+and answers completed with support. Returning from settings preserves the
+current picture. Every visit ends after five discoveries. Escape goes back
+through the garden to the main menu; closing releases its renderer and stops
+demonstrations and speech. Controls scroll into view on smaller displays.
+
+**The Discovery Trail** introduces more advanced ideas through experiments.
+Its seven levels are all available immediately, independently of the practice
+grade bands. Choose a topic and a comfortable range:
+
+| Trail level | Experiment | Foundation |
+| --- | --- | --- |
+| 1. Odd & even | Pair stones and look for an unpaired one | Patterns and divisibility |
+| 2. Prime builders | Rearrange blocks into rows; find factors; distinguish 1, primes and composites | Factorization and reasoning |
+| 3. Power steps | Start with one block and repeatedly double or triple the group | Powers and exponential growth |
+| 4. Coordinate paths | Move across and up to a target on a labeled grid | Coordinates and graphing |
+| 5. Angle turns | Turn a ray in 15° steps to match a target | Angle measurement, geometry and trigonometry |
+| 6. Area builders | Cover a rectangle with unit squares | Multiplication, square units and area |
+| 7. Slope & change | Walk a path and compare rise with run | Ratios, graphs and rates of change |
+
+These are introductory foundations, not a complete trigonometry or calculus
+course. Explanations connect angles to triangles, powers to growth, area to
+counting small pieces, and slope to the later idea of a derivative.
+
+Garden and trail observations are stored per learner under `garden` in the
+existing progress file. They remain separate from practice statistics and tutor
+skill checks; exploration is not treated as evidence of mastery.
 
 **Number Lab** lets children invent answers with live number dials. Every build
 puzzle has multiple solutions: rearrange counting lights, keep a difference
@@ -132,7 +196,7 @@ There are no timers to beat, daily obligations, leaderboards, or purchases.
 Finding a second solution and finishing a practice round are natural stopping
 points. Beginning readers may still need an adult to read instructions in the shell
 overlay; spoken instructions are available only in the Math Garden, and only
-when the browser has a local English voice.
+when Qt has a working local English voice.
 
 ### Menu
 
@@ -171,10 +235,15 @@ away.
 | 6 | Parts & percents | 10–12 | Fraction of a whole, percent of, order of ops, negatives |
 
 Progress lives in `~/.local/state/omarchy/kids-math.json` (preferred level,
-round counts, skill practice history, and saved inventions). Removing the plugin
-does not delete that file. Math Garden observations live in the browser's local
-storage under `kids-math-garden:v1:<learner>` and are cleared by clearing site
-data for the plugin's `file://` origin.
+round counts, skill practice history, saved inventions, garden observations and
+garden settings). Removing the plugin does not delete that file.
+
+Version 1.3 replaces the browser garden. Existing practice, assessments and
+invention books are preserved. Old browser observations are not automatically
+imported: they remain in that browser's local storage under
+`kids-math-garden:v1:<URL-encoded learner>`. The native garden starts its own
+observations. The previous web app remains available in Git history if needed
+to review those observations; this update does not clear browser data.
 
 ## AI Tutor contract
 
@@ -270,33 +339,26 @@ node --test tests/garden-engine-test.js
 If Omarchy is installed, also:
 
 ```sh
-qmllint -I "$OMARCHY_PATH/shell" Overlay.qml BarWidget.qml LabView.qml MathButton.qml CounterField.qml GardenHome.qml
+qmllint -I "$OMARCHY_PATH/shell" *.qml
 omarchy-shell shell rescanPlugins
 ```
 
-`MathEngine.js` and `LabEngine.js` are shared by QML and Node. Tests exercise
-all skills, thousands of generated puzzles, persistence, and assessment isolation.
+`MathEngine.js`, `LabEngine.js` and `GardenEngine.js` are shared by QML and Node.
+Tests exercise all skills, thousands of generated puzzles, persistence, and
+assessment isolation.
 
 ### Math Garden
 
-The garden source is `garden/src/` (`lessons.js` holds the pure lesson and
-session logic, `scene.js` the three.js picture, `app.js` the page). The shell
-loads the committed bundle `garden/garden.js`, so rebuild it after editing
-`garden/src/`:
+`GardenEngine.js` holds deterministic lessons, experiments, layout and progress
+normalization. `GardenView.qml` owns a visit; `GardenBoard.qml` keeps input and
+feedback aligned with its lazily loaded `GardenScene3D.qml`. `GardenToken3D.qml`
+builds the objects from native meshes. `GardenPicture.qml` provides the QML 2D
+fallback; `TrailDiagram.qml` draws grids, angle guides and unit-square outlines.
+`GardenSpeech.qml` loads only when Listen is requested.
 
-```sh
-npm install
-npm run build          # esbuild → garden/garden.js, copies the three.js license
-npm test               # engine tests, including garden/src/lessons.js
-npm run test:browser   # Playwright: offline load, one-to-one counting, conservation,
-                       # reduced motion, learner isolation, no-WebGL and no-storage
-                       # fallbacks, small screens
-npm run preview        # optional local preview of garden/ on 127.0.0.1:4173
-```
-
-`npm` is a development dependency only. Installed plugins ship the built
-bundle, `node_modules/` is ignored, and nothing runs `npm` at install or play
-time. Illustrations in `garden/assets/` are original, generated for this plugin.
+No bundle build or npm installation is needed. Run `npm test` for the pure
+engine tests. Illustrations in `garden/assets/` are original, generated for
+this plugin. The older Three.js app and browser tests have been retired.
 
 An optional Qt smoke suite runs the actual QML with in-memory shell services:
 
@@ -304,15 +366,32 @@ An optional Qt smoke suite runs the actual QML with in-memory shell services:
 uv venv /tmp/kids-math-qt
 uv pip install --python /tmp/kids-math-qt/bin/python 'PySide6==6.11.2'
 /tmp/kids-math-qt/bin/python tests/qml-smoke.py
-# Optionally render screenshots outside the repository:
-/tmp/kids-math-qt/bin/python tests/qml-smoke.py --screenshots /tmp/kids-math-screenshots
+# Exercise the actual 3D renderer on a development machine with Xvfb and Mesa:
+QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a \
+  /tmp/kids-math-qt/bin/python tests/qml-smoke.py --renderer opengl \
+  --screenshots /tmp/kids-math-screenshots
+# Exercise an unavailable QtQuick3D import and the native fallback:
+QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a \
+  /tmp/kids-math-qt/bin/python tests/qml-smoke.py --renderer opengl --missing-3d
 ```
 
-PySide6 is only a development dependency. This suite checks timers, repeated
-input, keyboard navigation, small-screen scrolling, and saved-invention replay.
-It does not replace a live Omarchy check of Wayland focus, theme tokens, or
-Quickshell FileView persistence. See [EVALUATION.md](EVALUATION.md) for the design
-assessment, research rationale, and remaining product gaps.
+To refresh the four additional activity screenshots shown above:
+
+```sh
+QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a \
+  /tmp/kids-math-qt/bin/python tests/qml-smoke.py --renderer opengl \
+  --screenshots docs/screenshots \
+  --screenshot-filter garden-join,garden-ten,trail-primes,trail-powers
+```
+
+PySide6 is only a development dependency. On Ubuntu the XCB platform plugin
+also needs `libxcb-cursor0`. `--light-theme` checks a light sample theme.
+This suite checks actual rendered-counter input, all trail activities, learner
+isolation, repeated submissions, reduced motion, timer cancellation, speech
+integration with a mock voice, small-screen scrolling, and saved-invention replay.
+It does not replace a live Omarchy check of Wayland focus, actual speech output,
+theme tokens, GPU drivers or Quickshell FileView persistence. See
+[EVALUATION.md](EVALUATION.md) for the design assessment and remaining gaps.
 
 ## Remove
 

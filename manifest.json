@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "omarchykids.math",
   "name": "Kids Math",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": "Omarchy Kids",
   "license": "MIT",
-  "description": "A picture-led Math Garden for ages 5–8 with animated counting, adding, making ten, and place value, plus Number Lab and tutor skill checks.",
+  "description": "A native 3D Math Garden and Discovery Trail: counting, primes, powers, coordinates, angles, area and slope, plus Number Lab and tutor skill checks.",
   "kinds": ["overlay", "bar-widget"],
   "keepLoaded": true,
   "entryPoints": {

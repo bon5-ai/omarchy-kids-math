@@ -10,22 +10,38 @@ import os
 from pathlib import Path
 import tempfile
 import shutil
+import sys
+import re
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("QSG_RHI_BACKEND", "software")
-from PySide6.QtCore import QUrl, Qt, qInstallMessageHandler, QObject
+from PySide6.QtCore import QUrl, Qt, qInstallMessageHandler, QObject, QPointF
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlEngine, QQmlComponent, QQmlExpression
 from PySide6.QtTest import QTest
-from PySide6.QtQuick import QQuickWindow
+from PySide6.QtQuick import QQuickWindow, QSGRendererInterface
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--screenshots", type=Path)
+parser.add_argument("--screenshot-filter", default="", help="Comma-separated capture names; empty captures all")
+parser.add_argument("--preview", type=Path, help="Optional marketplace preview image path")
+parser.add_argument("--renderer", choices=("software", "opengl"), default="software")
+parser.add_argument("--missing-3d", action="store_true")
+parser.add_argument("--light-theme", action="store_true")
 args = parser.parse_args()
+QQuickWindow.setGraphicsApi(QSGRendererInterface.Software if args.renderer == "software" else QSGRendererInterface.OpenGL)
 repo = Path(__file__).resolve().parent.parent
 app = QGuiApplication([])
 warnings = []
+expected_warnings = []
+def failure(kind, value, traceback):
+    if warnings:
+        print("\n".join(warnings), file=sys.stderr)
+    sys.__excepthook__(kind, value, traceback)
+sys.excepthook = failure
 def log(kind, context, message):
+    if args.missing_3d and ("MissingQtQuick3D" in message or "GardenScene3D.qml" in message):
+        expected_warnings.append(message)
+        return
     if "file:" in message or "Error" in message or "Cannot" in message:
         warnings.append(message)
 qInstallMessageHandler(log)
@@ -37,6 +53,8 @@ with tempfile.TemporaryDirectory(prefix="kids-math-qml-") as directory:
         content = source.read_text()
         if source.name == "Overlay.qml":
             content = "\n".join(line for line in content.splitlines() if "WlrLayershell." not in line)
+        if args.missing_3d and source.name == "GardenScene3D.qml":
+            content = content.replace("import QtQuick3D", "import MissingQtQuick3D")
         (base / source.name).write_text(content)
 
     def module(name, files, singletons=()):
@@ -44,6 +62,8 @@ with tempfile.TemporaryDirectory(prefix="kids-math-qml-") as directory:
         folder.mkdir(parents=True)
         entries = ["module " + name]
         for typename, body in files.items():
+            if args.light_theme and typename == "Color":
+                body = body.replace('"#13222d"', '"#f5f3ea"').replace('"#eff5ef"', '"#233e36"').replace('"#b6e2a1"', '"#376e58"')
             singleton = typename in singletons
             entries.append(("singleton " if singleton else "") + typename + " 1.0 " + typename + ".qml")
             (folder / (typename + ".qml")).write_text(("pragma Singleton\n" if singleton else "") + body)
@@ -94,6 +114,23 @@ Window {
  property Edges anchors: Edges {}
 }''',
     }, ("Quickshell", "ExclusionMode"))
+    # Exercise the speech UI without a system daemon or audio output. The actual
+    # optional GardenSpeech.qml component still loads and selects its voice.
+    module("QtTextToSpeech", {
+        "TextToSpeech": '''import QtQuick
+QtObject {
+ enum State { Ready, Speaking, Paused, Error }
+ property string engine
+ property real rate: 0
+ property int state: TextToSpeech.Ready
+ property var voice
+ property string lastSpoken: ""
+ function availableEngines() { return ["speechd"] }
+ function findVoices(criteria) { return [{name: "Local test voice"}] }
+ function say(text) { lastSpoken = text; state = TextToSpeech.Speaking }
+ function stop() { lastSpoken = ""; state = TextToSpeech.Ready }
+}''',
+    })
     module("Quickshell.Wayland", {"Placeholder": "import QtQuick\nQtObject {}"})
     module("Quickshell.Io", {
         "FileView": '''import QtQuick
@@ -127,7 +164,7 @@ QtObject {
     host.show()
     def js(source, scope=root):
         engine.rootContext().setContextProperty("testSubject", scope)
-        source = source.replace("lab.", "testSubject.")
+        source = re.sub(r"(?<![\w.])(?:lab|garden)\.", "testSubject.", source)
         expression = QQmlExpression(QQmlEngine.contextForObject(scope), scope, source)
         value, _ = expression.evaluate()
         assert not expression.hasError(), expression.error().toString()
@@ -139,19 +176,102 @@ QtObject {
         app.processEvents()
         QTest.qWait(30)
     def screenshot(name):
-        if args.screenshots:
+        if args.screenshots and (not args.screenshot_filter or name in args.screenshot_filter.split(",")):
             args.screenshots.mkdir(parents=True, exist_ok=True)
             settle()
             assert window.grabWindow().save(str(args.screenshots / (name + ".png")))
+        if args.preview and name == "home":
+            settle()
+            assert window.grabWindow().save(str(args.preview))
     js('root.open("{}")')
     settle()
     window = next(w for w in app.topLevelWindows() if isinstance(w, QQuickWindow) and w != host)
     progress = root.findChild(QObject, "progressFile")
     assert progress.property("writes") == 0
     screenshot("home")
-    check('root.gardenUrl("ten").indexOf("garden/index.html#learner=default&level=1&activity=ten") >= 0', "garden launches the bundled local page with learner, range and activity")
-    js('root.learnerId = "a&b #c"; root.levelId = 6')
-    check('root.gardenUrl("join").indexOf("learner=a%26b%20%23c&level=3&activity=join") >= 0', "garden URL safely encodes learner IDs and caps the range")
+    js('root.launchGarden("count")')
+    settle()
+    garden = root.findChild(QObject, "mathGarden")
+    assert garden, "native garden loads"
+    check('root.opened && root.screen === "garden"', "garden stays in the same shell overlay")
+    check('garden.lesson.a === 5 && garden.levelId === 1', "native engine creates the first counting lesson", garden)
+    check('garden.sceneBoard.rendering3D === ' + str(args.renderer == "opengl" and not args.missing_3d).lower(), "garden selects the available renderer (window API: " + str(window.rendererInterface().graphicsApi()) + ", board API: " + str(js('garden.sceneBoard.GraphicsInfo.api', garden)) + ")", garden)
+    if args.missing_3d:
+        assert expected_warnings, "missing-module fallback was exercised"
+    assert progress.property("writes") == 0, "opening a garden never writes progress"
+    # Exercise real input over the composited scene, then keyboard activation.
+    token = js('garden.sceneBoard.tokens.itemAt(0)', garden)
+    point = token.mapToScene(QPointF(token.width() / 2, token.height() / 2)).toPoint()
+    QTest.mouseClick(window, Qt.LeftButton, pos=point)
+    QTest.mouseClick(window, Qt.LeftButton, pos=point)
+    check('garden.picture.marked.length === 1', "touching a rendered apple twice counts it once", garden)
+    token = js('garden.sceneBoard.tokens.itemAt(1)', garden)
+    token.forceActiveFocus()
+    QTest.keyClick(window, Qt.Key_Space)
+    check('garden.picture.marked.length === 2', "Space activates an accessible picture counter", garden)
+    screenshot("garden-count")
+    js('garden.listen()', garden)
+    settle()
+    check('garden.narrator !== null && garden.narrator.available', "Listen loads the optional Qt speech component", garden)
+    js('garden.showGrownups(); garden.back()', garden)
+    check('garden.page === "lesson" && garden.picture.marked.length === 2', "grown-up settings return to the same activity without losing the picture", garden)
+    js('garden.choose(4); garden.choose(5); garden.choose(5)', garden)
+    check('garden.session.solved && garden.progress.activities.count.solved === 1 && garden.progress.activities.count.supported === 1', "helped garden answers persist exactly once", garden)
+    check('root.progress.learners.default.rounds === 0 && root.progress.lastAssessment === null', "garden observations do not alter practice or assessment scores")
+    js('garden.advance(); garden.advance()', garden)
+    check('garden.session.index === 1 && !garden.session.solved', "native Next never skips an unanswered discovery", garden)
+    js('garden.saveSettings(3, true); garden.showMe(); garden.showMe()', garden)
+    check('!garden.demonstrating && garden.picture.marked.length === Math.min(2, garden.lesson.a) && garden.session.helped', "gentle Show me advances deliberately without animation", garden)
+    js('for (var i = 0; i < 4; i++) { garden.choose(garden.lesson.answer); garden.advance() }', garden)
+    check('garden.page === "complete" && garden.session.answers.length === 5', "a garden visit ends after five discoveries", garden)
+    screenshot("garden-complete")
+    js('garden.start("join"); garden.touch(4); garden.performOne()', garden)
+    check('garden.picture.moved.length === 2', "frog input mixes direct touch and step controls", garden)
+    screenshot("garden-join")
+    js('garden.start("take"); garden.touch(3); garden.performOne(); garden.touch(3)', garden)
+    check('garden.picture.moved.length === 2 && garden.picture.marked.length === 0', "departed frogs cannot be removed or counted again", garden)
+    screenshot("garden-take")
+    js('garden.start("ten"); garden.touch(6); garden.touch(6); garden.touch(7)', garden)
+    check('garden.picture.filled.length === 1 && garden.sceneBoard.tokens.count === 10', "ten-frame planting is reversible and preserves ten spaces", garden)
+    screenshot("garden-ten")
+    js('garden.start("tens"); garden.touch(0); garden.touch(1); garden.touch(2)', garden)
+    check('Garden.counted(garden.lesson, garden.picture) === 21', "native towers represent ten units apiece", garden)
+    screenshot("garden-tens")
+    for activity in ("parity", "primes", "powers", "coordinates", "angles", "area", "slope"):
+        js('garden.start("' + activity + '")', garden)
+        if activity == "primes":
+            js('garden.adjust("rows", 1)', garden)
+            check('garden.picture.rows === 2 && garden.lesson.answer === 1', "prime experiment rearranges seven blocks without changing their quantity", garden)
+        elif activity == "coordinates":
+            js('garden.adjust("pointX", 3); garden.adjust("pointY", 2)', garden)
+            check('Garden.pictureComplete(garden.lesson, garden.picture)', "coordinate movement reaches the target", garden)
+        elif activity == "angles":
+            js('garden.adjust("angle", 90)', garden)
+            check('garden.picture.angle === 90 && Garden.pictureComplete(garden.lesson, garden.picture)', "angle experiment measures a quarter-turn", garden)
+        else:
+            js('garden.performOne(); garden.performOne()', garden)
+        screenshot("trail-" + activity)
+        js('garden.choose(garden.lesson.answer)', garden)
+        check('garden.session.solved && garden.progress.activities[garden.lesson.kind].solved === 1', activity + " observations persist in QML", garden)
+    js('garden.saveSettings(3, false); garden.start("count"); garden.showMe()', garden)
+    check('garden.demonstrating', "playful Show me starts a teaching timer", garden)
+    QTest.keyClick(window, Qt.Key_Escape)
+    check('garden.page === "home" && !garden.demonstrating', "Escape returns to the garden and cancels its timer", garden)
+    QTest.qWait(850)
+    check('garden.session === null', "an abandoned demonstration cannot change the next screen", garden)
+    js('root.open(JSON.stringify({learnerId:"a&b #c",level:6})); root.launchGarden("primes")')
+    settle()
+    garden = root.findChild(QObject, "mathGarden")
+    check('garden.levelId === 3 && garden.progress.activities.count.solved === 0', "learner IDs remain isolated and garden ranges are capped", garden)
+    js('garden.choose(garden.lesson.answer)', garden)
+    check('root.progress.learners["a&b #c"].garden.activities.primes.solved === 1 && root.progress.learners.default.garden.activities.count.solved === 5', "each learner keeps their own native observations")
+    js('root.open("{}"); root.launchGarden("count")')
+    settle()
+    garden = root.findChild(QObject, "mathGarden")
+    check('garden.progress.activities.count.solved === 5 && garden.levelId === 3', "returning to the garden restores learner settings and observations", garden)
+    js('garden.showMe(); root.close()', garden)
+    settle()
+    check('!gardenLoader.active && gardenLoader.item === null', "closing unloads the garden and releases its renderer")
 
     js('root.open(JSON.stringify({mode:"assessment", input:"keypad", level:3, count:3, seed:42, adaptive:false}))')
     js('root.typed = String(root.currentQuestion.answer + 1); root.submitCurrent(); root.submitCurrent()')
@@ -242,6 +362,25 @@ QtObject {
     screenshot("small-screen")
     assert scrolled, "keyboard focus must scroll into view"
     check('viewport.contentHeight > viewport.height', "small-screen keyboard navigation scrolls to controls")
+    js('root.close()')
+    settle()
+    # Native garden focus and scrolling at small sizes, including long prompts.
+    js('root.open("{}"); root.launchGarden("slope")')
+    settle()
+    garden = root.findChild(QObject, "mathGarden")
+    assert js('garden.sceneBoard.width <= garden.width', garden)
+    saw_answer = False
+    for _ in range(24):
+        QTest.keyClick(window, Qt.Key_Tab)
+        settle()
+        focus = window.activeFocusItem()
+        if focus and focus.objectName().startswith("gardenAnswer"):
+            saw_answer = True
+            point = focus.mapToScene(QPointF(0, 0))
+            assert 0 <= point.y() < window.height() and point.y() + focus.height() <= window.height()
+            break
+    assert saw_answer, "small-screen trail answers remain reachable by keyboard"
+    screenshot("garden-small-screen")
     js('root.close()')
     settle()
     assert not warnings, "\n".join(warnings)
