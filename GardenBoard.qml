@@ -118,8 +118,20 @@ Rectangle {
         kind: board.lesson.kind
         gold: token.gold
         tower: token.placement.tower
-        visible: !board.rendering3D && !token.empty
+        visible: !board.rendering3D && !token.empty && board.lesson.kind !== "count"
         opacity: token.removed ? 0.3 : 1
+      }
+      Image {
+        anchors.centerIn: parent
+        anchors.verticalCenterOffset: -token.lift
+        width: token.placement.size * 1.08
+        height: width
+        source: "garden/assets/apple-realistic.png"
+        sourceSize: Qt.size(384, 384)
+        fillMode: Image.PreserveAspectFit
+        mipmap: true
+        smooth: true
+        visible: !board.rendering3D && !token.empty && board.lesson.kind === "count"
       }
       Text {
         anchors.centerIn: parent

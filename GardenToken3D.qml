@@ -10,8 +10,21 @@ Node {
   property real unit: 70
   scale: Qt.vector3d(unit / 100, unit / 100, unit / 100)
   eulerRotation.y: kind === "tens" ? 16 : 0
+  Model {
+    visible: token.kind === "count"
+    source: "#Rectangle"
+    scale: Qt.vector3d(1.08, 1.08, 1)
+    materials: PrincipledMaterial {
+      lighting: PrincipledMaterial.NoLighting
+      alphaMode: PrincipledMaterial.Blend
+      baseColorMap: Texture {
+        source: "garden/assets/apple-realistic.png"
+        generateMipmaps: true
+      }
+    }
+  }
   Repeater3D {
-    model: Garden.parts(token.kind, token.gold, token.tower)
+    model: token.kind === "count" ? [] : Garden.parts(token.kind, token.gold, token.tower)
     delegate: Model {
       id: piece
       required property var modelData

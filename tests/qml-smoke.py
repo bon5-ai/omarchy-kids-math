@@ -209,7 +209,7 @@ QtObject {
     token.forceActiveFocus()
     QTest.keyClick(window, Qt.Key_Space)
     check('garden.picture.marked.length === 2', "Space activates an accessible picture counter", garden)
-    screenshot("garden-count")
+    screenshot("apple-orchard")
     js('garden.listen()', garden)
     settle()
     check('garden.narrator !== null && garden.narrator.available', "Listen loads the optional Qt speech component", garden)

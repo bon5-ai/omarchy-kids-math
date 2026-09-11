@@ -33,7 +33,10 @@ the counting pictures use a consistent, readable garden palette.
 
 ### Native counting garden
 
-![Interactive Qt Quick 3D apples inside the Math Garden overlay](docs/screenshots/garden-count.png)
+The orchard uses a generated transparent apple illustration as a texture inside
+the Qt Quick 3D scene, keeping the fruit natural and recognizable at counting size.
+
+![Natural red apples in the native Qt Quick 3D Math Garden](docs/screenshots/apple-orchard.png)
 
 ### Frog pond
 
@@ -381,7 +384,7 @@ To refresh the four additional activity screenshots shown above:
 QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a \
   /tmp/kids-math-qt/bin/python tests/qml-smoke.py --renderer opengl \
   --screenshots docs/screenshots \
-  --screenshot-filter garden-join,garden-ten,trail-primes,trail-powers
+  --screenshot-filter apple-orchard,garden-join,garden-ten,trail-primes,trail-powers
 ```
 
 PySide6 is only a development dependency. On Ubuntu the XCB platform plugin
