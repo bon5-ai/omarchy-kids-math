@@ -12,7 +12,6 @@ Item {
   id: root
 
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
-  property string homePath: Quickshell.env("HOME")
   property var shell: null
   property var manifest: null
 
@@ -24,6 +23,7 @@ Item {
   property int roundSize: 10
   property bool adaptive: false
   property var payload: ({})
+  property string pendingOpen: ""
   property var progress: ({
       schemaVersion: 1,
       learners: {},
@@ -82,12 +82,21 @@ Item {
   }
 
   function open(payloadJson) {
+    var incoming = MathEngine.parsePayload(payloadJson === undefined ? "{}" : payloadJson)
+    if (!incoming) return false
+    if (!progressStore.ready) {
+      root.pendingOpen = typeof payloadJson === "string" && payloadJson ? payloadJson :
+        MathEngine.boundedJson(payloadJson || {}, MathEngine.LIMITS.payloadBytes)
+      return true
+    }
+    var clean = MathEngine.decodeProgress(root.progress)
+    if (!clean || !MathEngine.learnerRecord(clean, incoming.learnerId)) return false
     root.screen = "home"
     if (root.sessionOpen && root.mode === "assessment")
       root.finishSession("abandoned")
     advanceTimer.stop()
     root.progress = MathEngine.normalizeProgress(root.progress)
-    root.payload = MathEngine.parsePayload(payloadJson || "{}")
+    root.payload = incoming
     root.mode = root.payload.mode
     root.learnerId = root.payload.learnerId
     root.roundSize = root.payload.count
@@ -112,9 +121,11 @@ Item {
     Qt.callLater(function () {
       keyboardAnchor.forceActiveFocus()
     })
+    return true
   }
 
   function close() {
+    root.pendingOpen = ""
     if (gardenLoader.item) gardenLoader.item.stop()
     if (root.sessionOpen && root.mode === "assessment")
       root.finishSession("abandoned")
@@ -137,7 +148,7 @@ Item {
   }
 
   function lastResult() {
-    return root.lastResultJson || "{}"
+    return MathEngine.boundedJson(root.lastResultObject || {}, MathEngine.LIMITS.ipcBytes) || "{}"
   }
 
   function catalog() {
@@ -145,31 +156,49 @@ Item {
   }
 
   function launchGarden(activity) {
+    if (activity !== undefined && activity !== "" &&
+        (typeof activity !== "string" || activity.length > 16 ||
+         !Garden.activities().some(function (entry) { return entry.id === activity }))) return false
     root.gardenActivity = activity || ""
     root.screen = "garden"
   }
 
   function saveGarden(value) {
+    // shell call can reach any root method, not just the documented queries.
+    // This UI-only method accepts a bounded object, never raw JSON from IPC.
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+        !MathEngine.boundedValue(value, MathEngine.LIMITS.payloadBytes, 4)) return false
     var learner = MathEngine.learnerRecord(root.progress, root.learnerId)
+    if (!learner) return false
     learner.garden = Garden.loadProgress(value)
-    root.progress = MathEngine.normalizeProgress(JSON.stringify(root.progress))
     root.saveProgress()
   }
 
   function learnerProgress() {
     var learner = MathEngine.learnerRecord(root.progress, root.learnerId)
-    return JSON.stringify(learner)
+    return MathEngine.boundedJson(learner || {}, MathEngine.LIMITS.ipcBytes) || "{}"
   }
 
   function loadProgress(raw) {
-    root.progress = MathEngine.normalizeProgress(raw)
+    var clean = raw ? MathEngine.decodeProgress(raw) : null
+    if (clean && root.opened && !MathEngine.learnerRecord(clean, root.learnerId)) return false
+    if (clean) root.progress = clean
+    else progressStore.reject()
   }
 
   function saveProgress() {
-    progressFile.setText(JSON.stringify(root.progress, null, 2) + "\n")
+    var clean = MathEngine.decodeProgress(root.progress)
+    var raw = clean ? MathEngine.boundedJson(clean, MathEngine.LIMITS.stateBytes) : ""
+    if (!raw) {
+      progressStore.error = "Progress is full. Changes will stay in this session."
+      return false
+    }
+    root.progress = clean
+    return progressStore.save(raw)
   }
 
   function beginRound(levelId) {
+    if (typeof levelId !== "number" || !isFinite(levelId)) return false
     advanceTimer.stop()
     root.lastResultObject = null
     root.lastResultJson = ""
@@ -194,11 +223,13 @@ Item {
   }
 
   function pushAdaptiveQuestion() {
+    if (!root.sessionOpen || !root.adaptive || root.questions.length >= Math.min(root.roundSize, MathEngine.LIMITS.items)) return false
     var q = MathEngine.generateQuestion(root.levelId, root.rng)
     root.questions = root.questions.concat([q])
   }
 
   function showQuestionAt(index) {
+    if (typeof index !== "number" || Math.floor(index) !== index) return false
     if (index < 0 || index >= root.questions.length)
       return
     root.questionIndex = index
@@ -271,6 +302,9 @@ Item {
   }
 
   function recordItem(correct, response) {
+    if (!root.sessionOpen || !root.currentQuestion || typeof correct !== "boolean" ||
+        typeof response !== "number" || !isFinite(response) ||
+        root.sessionItems.length >= Math.min(root.roundSize, MathEngine.LIMITS.items)) return false
     var q = root.currentQuestion
     var item = {
       id: q.id,
@@ -311,6 +345,7 @@ Item {
   }
 
   function finishSession(status) {
+    if (status !== undefined && status !== "complete" && status !== "abandoned") return false
     if (!root.sessionOpen)
       return
     root.sessionOpen = false
@@ -326,8 +361,9 @@ Item {
       seed: root.seed,
       items: root.sessionItems
     })
+    if (!result) return
     root.lastResultObject = result
-    root.lastResultJson = JSON.stringify(result, null, 2)
+    root.lastResultJson = MathEngine.boundedJson(result, MathEngine.LIMITS.ipcBytes)
     if (result.total > 0) {
       root.progress = MathEngine.recordSession(root.progress, result, root.bestSessionStreak)
       root.saveProgress()
@@ -336,6 +372,7 @@ Item {
   }
 
   function appendDigit(digit) {
+    if (typeof digit !== "string" || !/^[0-9]$/.test(digit)) return false
     if (root.usingChoices || root.itemLocked)
       return
     if (root.typed.length >= 8)
@@ -359,6 +396,7 @@ Item {
   }
 
   function selectChoice(index) {
+    if (typeof index !== "number" || Math.floor(index) !== index) return false
     if (!root.usingChoices || root.itemLocked)
       return
     if (index < 0 || index >= root.choiceValues.length)
@@ -368,6 +406,7 @@ Item {
   }
 
   function moveChoice(delta) {
+    if (typeof delta !== "number" || Math.floor(delta) !== delta || Math.abs(delta) > 4) return false
     if (!root.usingChoices || root.itemLocked || root.choiceValues.length === 0)
       return
     var next = root.choiceCursor + delta
@@ -467,10 +506,11 @@ Item {
   }
 
   function saveNotebook(entries) {
+    if (!Array.isArray(entries) || !MathEngine.boundedValue(entries, MathEngine.LIMITS.ipcBytes, 4)) return false
     var learner = MathEngine.learnerRecord(root.progress, root.learnerId)
+    if (!learner) return false
     learner.notebook = Lab.normalizeNotebook(entries)
     learner.preferredLevel = root.levelId
-    root.progress = MathEngine.normalizeProgress(JSON.stringify(root.progress))
     root.saveProgress()
   }
 
@@ -488,15 +528,16 @@ Item {
     onTriggered: root.goNext()
   }
 
-  FileView {
-    id: progressFile
-    path: root.homePath + "/.local/state/omarchy/kids-math.json"
-    watchChanges: true
-    atomicWrites: true
-    printErrors: false
-    onLoaded: root.loadProgress(text())
-    onLoadFailed: root.loadProgress("{}")
-    onFileChanged: reload()
+  StateStore {
+    id: progressStore
+    onLoaded: raw => {
+      root.loadProgress(raw)
+      if (root.pendingOpen) {
+        var pending = root.pendingOpen
+        root.pendingOpen = ""
+        root.open(pending)
+      }
+    }
   }
 
   ListModel {
@@ -625,6 +666,16 @@ Item {
             id: body
             width: viewport.width
             spacing: Style.spacing.md
+
+            Text {
+              width: parent.width
+              visible: text !== ""
+              text: progressStore.error
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
 
             // Home
             Column {

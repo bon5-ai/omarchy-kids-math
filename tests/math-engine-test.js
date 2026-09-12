@@ -61,9 +61,7 @@ check("payload defaults and assessment start", function () {
     mode: "assessment",
     learnerId: "sam",
     count: 15,
-    seed: 7,
-    resultFile: "/tmp/math.json",
-    doneFile: "/tmp/math.done"
+    seed: 7
   })
   assert.equal(assessment.mode, "assessment")
   assert.equal(assessment.start, true)
@@ -73,6 +71,8 @@ check("payload defaults and assessment start", function () {
   assert.equal(assessment.adaptive, true)
   assert.equal(assessment.resultFile, undefined)
   assert.equal(assessment.doneFile, undefined)
+  assert.strictEqual(engine.parsePayload({resultFile: "/tmp/math.json"}), null)
+  assert.strictEqual(engine.parsePayload({doneFile: "/tmp/math.done"}), null)
 })
 
 check("adaptive level moves up and down", function () {
@@ -198,22 +198,22 @@ check("session progress attributes adaptive items to their actual levels", () =>
   const practice = engine.buildResult({mode: "practice", learnerId: "sam", levelId: 2, items: [
     {levelId: 2, skill: "add-within-20", correct: true, attempts: 2, hintUsed: true}
   ]})
-  engine.recordSession(data, practice, 0)
-  assert.strictEqual(data.lastAssessment, result)
-  assert.strictEqual(data.learners.sam.practiceSkills["add-within-20"].independent, 0)
-  assert.strictEqual(data.learners.sam.practiceSkills["add-within-20"].total, 1)
+  const practiced = engine.recordSession(data, practice, 0)
+  assert.deepStrictEqual(practiced.lastAssessment, result)
+  assert.strictEqual(practiced.learners.sam.practiceSkills["add-within-20"].independent, 0)
+  assert.strictEqual(practiced.learners.sam.practiceSkills["add-within-20"].total, 1)
 })
 
 check("abandonment doesn't change preferred level or count as completion", () => {
-  const data = engine.emptyProgress()
+  let data = engine.emptyProgress()
   engine.learnerRecord(data, "sam").preferredLevel = 4
-  engine.recordSession(data, engine.buildResult({mode: "assessment", status: "abandoned", learnerId: "sam", levelId: 4, items: [
+  data = engine.recordSession(data, engine.buildResult({mode: "assessment", status: "abandoned", learnerId: "sam", levelId: 4, items: [
     {levelId: 4, skill: "mul-to-10", correct: false, attempts: 1}
   ]}), 0)
   assert.strictEqual(data.learners.sam.preferredLevel, 4)
   assert.strictEqual(data.learners.sam.rounds, 0)
   const before = JSON.stringify(data)
-  engine.recordSession(data, engine.buildResult({mode: "assessment", status: "abandoned", learnerId: "sam", items: []}), 0)
+  data = engine.recordSession(data, engine.buildResult({mode: "assessment", status: "abandoned", learnerId: "sam", items: []}), 0)
   assert.strictEqual(JSON.stringify(data), before)
 })
 

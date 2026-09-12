@@ -133,22 +133,37 @@ QtObject {
     })
     module("Quickshell.Wayland", {"Placeholder": "import QtQuick\nQtObject {}"})
     module("Quickshell.Io", {
-        "FileView": '''import QtQuick
+        "StdioCollector": '''import QtQuick
 QtObject {
- objectName: "progressFile"
- property string path
- property bool watchChanges
- property bool atomicWrites
- property bool printErrors
+ property string text: ""
+ signal streamFinished()
+}''',
+        "Process": '''import QtQuick
+QtObject {
+ id: process
+ objectName: command.indexOf("write") >= 0 ? "progressFile" : "progressReader"
+ property var command: []
+ property bool clearEnvironment
+ property bool stdinEnabled
+ property bool running
+ property var stdout: null
  property int writes: 0
  property string savedText: ""
- signal loaded()
- signal loadFailed()
- signal fileChanged()
- function text() { return "{}" }
- function setText(value) { writes++; savedText = value }
- function reload() {}
- Component.onCompleted: loaded()
+ property int exitCode: 0
+ property bool hold: false
+ signal started()
+ signal exited(int exitCode, int exitStatus)
+ function write(value) { writes++; savedText = value }
+ function signal(value) { running = false; exited(1, 1) }
+ function finish() {
+   if (stdout) { stdout.text = "{}"; stdout.streamFinished() }
+   running = false
+   exited(exitCode, 0)
+ }
+ onRunningChanged: if (running) Qt.callLater(function () {
+   process.started()
+   if (!hold) Qt.callLater(process.finish)
+ })
 }''',
     })
     engine = QQmlEngine()
@@ -188,6 +203,9 @@ QtObject {
     window = next(w for w in app.topLevelWindows() if isinstance(w, QQuickWindow) and w != host)
     progress = root.findChild(QObject, "progressFile")
     assert progress.property("writes") == 0
+    check('progressStore.ready && progressStore.writable && root.opened && root.levelId === 1', "opening waits for the initial state read")
+    check('root.open("{broken") === false && root.open(JSON.stringify({learnerId:"x".repeat(65)})) === false && root.open(" ".repeat(4097)) === false', "invalid summon payloads are rejected")
+    check('root.saveGarden("[".repeat(10000)) === false && root.saveNotebook("[]") === false && root.appendDigit("9".repeat(10000)) === false && root.launchGarden("x".repeat(10000)) === false', "direct IPC method calls cannot bypass input limits")
     screenshot("home")
     js('root.launchGarden("count")')
     settle()
@@ -282,6 +300,7 @@ QtObject {
     check('root.questionIndex === 1 && root.sessionItems.length === 1', "assessment timer advances exactly once")
     js('root.finishSession("abandoned")')
     check('root.lastResultObject.status === "abandoned" && root.lastResultObject.total === 1 && root.progress.learners.default.rounds === 0', "partial assessment saves answers without a completed round")
+    settle()
     old_writes = progress.property("writes")
     js('root.open(JSON.stringify({mode:"assessment", seed:42})); root.close()')
     assert progress.property("writes") == old_writes
@@ -383,5 +402,33 @@ QtObject {
     screenshot("garden-small-screen")
     js('root.close()')
     settle()
+    # Exercise the actual StateStore.qml queue and failure handling using the
+    # asynchronous Process stand-in. Real descriptor I/O has separate tests.
+    js('root.open(JSON.stringify({mode:"assessment", learnerId:"default"}))')
+    check('root.open(JSON.stringify({mode:"assessment", extra:true})) === false && root.sessionOpen && root.lastResultObject === null', "rejected summons cannot abandon a running assessment")
+    js('for (var i = 0; i < 100; i++) { root.pushAdaptiveQuestion(); root.recordItem("true") }')
+    check('root.questions.length === root.roundSize && root.sessionItems.length === 0', "direct IPC calls cannot grow session arrays past the question cap")
+    js('root.close()')
+    settle()
+    js('for (var i = Object.keys(root.progress.learners).length; i < 16; i++) MathEngine.learnerRecord(root.progress, "capacity-" + i)')
+    check('root.open(JSON.stringify({learnerId:"new-at-capacity"})) === false && Object.keys(root.progress.learners).length === 16', "full learner storage rejects new identities without eviction")
+    check('root.open(JSON.stringify({learnerId:"default"})) === true', "existing learners can still open at capacity")
+    progress.setProperty("hold", True)
+    check('progressStore.save(JSON.stringify({revision:1}))', "a bounded snapshot starts saving")
+    settle()
+    check('progressStore.save(JSON.stringify({revision:2})) && progressStore.save(JSON.stringify({revision:3})) && JSON.parse(progressStore.pending).revision === 3', "one pending snapshot coalesces newer writes")
+    js('testSubject.finish()', progress)
+    settle()
+    assert progress.property("savedText") == '{"revision":3}'
+    progress.setProperty("exitCode", 1)
+    js('testSubject.finish()', progress)
+    settle()
+    check('!progressStore.writable && progressStore.error.length > 0 && !progressStore.save("{}")', "failed writes stop persistence and show a notice")
+    check('root.open(JSON.stringify({learnerId:"default"})) === true', "learning remains available after a storage failure")
+    js('root.lastResultObject = {oversized:"x".repeat(65537)}')
+    check('root.lastResult() === "{}"', "oversized IPC results are not returned")
+    js('root.loadProgress("[".repeat(10000))')
+    check('!progressStore.writable && Object.keys(root.progress.learners).length === 16', "rejected state cannot replace loaded learner records")
+    js('root.close()')
     assert not warnings, "\n".join(warnings)
     print("\nAll QML smoke tests passed (shell services mocked).")

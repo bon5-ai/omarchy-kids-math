@@ -4,7 +4,7 @@
   "private": true,
   "description": "Native Qt Quick 3D Math Garden and Discovery Trail for the Kids Math shell plugin",
   "scripts": {
-    "test": "node tests/math-engine-test.js && node tests/lab-engine-test.js && node --test tests/garden-engine-test.js",
+    "test": "node tests/math-engine-test.js && node tests/lab-engine-test.js && node --test tests/garden-engine-test.js tests/state-boundaries-test.js && python3 tests/state-store-test.py",
     "test:qml": "python3 tests/qml-smoke.py",
     "test:qml:3d": "python3 tests/qml-smoke.py --renderer opengl"
   }

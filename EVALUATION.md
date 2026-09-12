@@ -35,7 +35,7 @@ seeds remain repeatable given the same practice history.
 The native garden requires `qt6-quick3d` for 3D rendering and optionally
 `qt6-speech` plus a local English voice for narration. Missing 3D imports and
 the Qt software scene graph use QML picture counters. Garden observations now
-live under each learner's `garden` record in `kids-math.json`; they are practice
+live under each learner's `garden` record in `kids-math/progress.json`; they are practice
 notes, never mastery claims, and never enter tutor skill checks. Old browser
 observations are retained in browser storage but are not automatically imported.
 No JavaScript bundling or package installation hook runs during plugin install.

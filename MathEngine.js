@@ -550,7 +550,7 @@ function teachingSupport(q) {
 }
 
 function safeCount(value) {
-  return typeof value === "number" && isFinite(value) && value >= 0 ? Math.floor(value) : 0
+  return typeof value === "number" && isFinite(value) && value >= 0 ? Math.min(1000000, Math.floor(value)) : 0
 }
 
 function recordPracticeSkills(learner, items) {
@@ -667,26 +667,186 @@ function emptyProgress() {
   }
 }
 
-function normalizeProgress(raw) {
-  var data
-  try {
-    data = typeof raw === "string" ? JSON.parse(raw || "{}") : (raw || {})
-  } catch (e) {
-    return emptyProgress()
+// These ceilings also apply before serialization. Keep the transport limits in
+// StateStore.py in sync; the shell independently validates everything it reads.
+var LIMITS = { stateBytes: 262144, payloadBytes: 4096, ipcBytes: 65536,
+  depth: 12, keys: 64, nodes: 12000, learners: 16, notebook: 60, items: 40 }
+
+function utf8Bytes(text, ceiling) {
+  if (typeof text !== "string" || text.length > ceiling) return ceiling + 1
+  var bytes = 0
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charCodeAt(i)
+    if (c < 0x80) bytes++
+    else if (c < 0x800) bytes += 2
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length &&
+             text.charCodeAt(i + 1) >= 0xdc00 && text.charCodeAt(i + 1) <= 0xdfff) {
+      bytes += 4
+      i++
+    } else if (c >= 0xd800 && c <= 0xdfff) return ceiling + 1
+    else bytes += 3
+    if (bytes > ceiling) return bytes
   }
-  if (!data || typeof data !== "object" || Array.isArray(data)) return emptyProgress()
-  if (!data.learners || typeof data.learners !== "object" || Array.isArray(data.learners)) data.learners = {}
-  if (data.schemaVersion !== 1) data.schemaVersion = 1
-  if (data.lastAssessment === undefined) data.lastAssessment = null
-  return data
+  return bytes
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function validLearnerId(id) {
+  return typeof id === "string" && id.length > 0 && utf8Bytes(id, 64) <= 64 &&
+    !/[\u0000-\u001f\u007f]/.test(id)
+}
+
+// A bounded walk measures the exact compact JSON size using only small scalar
+// serializations. It rejects getters, cycles, exotic objects and excess keys
+// before JSON.stringify can traverse them or allocate an oversized result.
+function boundedValue(value, ceiling, maxDepth) {
+  var bytes = 0, nodes = 0
+  function visit(item, depth) {
+    if (++nodes > LIMITS.nodes || bytes > ceiling) return false
+    if (item === null || typeof item === "boolean") bytes += item === null ? 4 : item ? 4 : 5
+    else if (typeof item === "number") {
+      if (!isFinite(item) || Math.abs(item) > Number.MAX_SAFE_INTEGER) return false
+      bytes += String(item).length
+    } else if (typeof item === "string") {
+      if (item.length > 512 || utf8Bytes(item, 2048) > 2048) return false
+      bytes += utf8Bytes(JSON.stringify(item), ceiling)
+    } else if (typeof item === "object") {
+      if (depth >= maxDepth) return false
+      var array = Array.isArray(item)
+      var prototype = Object.getPrototypeOf(item)
+      if (!array && prototype !== Object.prototype && prototype !== null) return false
+      if (array && prototype !== Array.prototype) return false
+      if (array && item.length > LIMITS.notebook) return false
+      bytes += 2
+      var count = 0
+      for (var key in item) {
+        if (!Object.prototype.hasOwnProperty.call(item, key)) continue
+        if (++count > (array ? LIMITS.notebook : LIMITS.keys) || utf8Bytes(key, 64) > 64) return false
+        var descriptor = Object.getOwnPropertyDescriptor(item, key)
+        if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, "value")) return false
+        if (count > 1) bytes++
+        if (!array) bytes += utf8Bytes(JSON.stringify(key), ceiling) + 1
+        if (!visit(descriptor.value, depth + 1)) return false
+      }
+      if (array && count !== item.length) return false
+    } else return false
+    return bytes <= ceiling
+  }
+  try { return visit(value, 0) } catch (e) { return false }
+}
+
+function parseBounded(raw, ceiling, maxDepth) {
+  if (typeof raw !== "string") return boundedValue(raw, ceiling, maxDepth) ? raw : null
+  if (utf8Bytes(raw, ceiling) > ceiling) return null
+  var depth = 0, quoted = false, escaped = false
+  // Strings are opaque to this scan, including escaped quotes and brackets.
+  // Container and separator counts bound allocations before JSON.parse.
+  var counts = [], nodes = 0
+  for (var i = 0; i < raw.length; i++) {
+    var c = raw.charAt(i)
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (c === "\\") escaped = true
+      else if (c === '"') quoted = false
+    } else if (c === '"') quoted = true
+    else if (c === "{" || c === "[") {
+      if (++depth > maxDepth || ++nodes > LIMITS.nodes) return null
+      counts.push(1)
+    } else if (c === "}" || c === "]") {
+      if (--depth < 0) return null
+      counts.pop()
+    } else if (c === ",") {
+      if (!depth || ++counts[depth - 1] > LIMITS.keys || ++nodes > LIMITS.nodes) return null
+    }
+  }
+  if (depth || quoted) return null
+  try {
+    var data = JSON.parse(raw)
+    return boundedValue(data, ceiling, maxDepth) ? data : null
+  } catch (e) { return null }
+}
+
+function boundedJson(value, ceiling) {
+  return boundedValue(value, ceiling, LIMITS.depth) ? JSON.stringify(value) : ""
+}
+
+function cleanText(value, limit) {
+  return typeof value === "string" && value.length <= limit ? value : ""
+}
+
+function normalizeLearner(raw) {
+  var value = isRecord(raw) ? raw : {}
+  var learner = { preferredLevel: clampLevelId(value.preferredLevel || 1),
+    rounds: safeCount(value.rounds), bestStreak: safeCount(value.bestStreak),
+    lastPlayedAt: cleanText(value.lastPlayedAt, 32), byLevel: {}, practiceSkills: {}, notebook: [] }
+  for (var level = 1; level <= 6; level++) {
+    var row = isRecord(value.byLevel) && value.byLevel[level]
+    if (isRecord(row)) learner.byLevel[level] = { rounds: safeCount(row.rounds),
+      correct: Math.min(safeCount(row.correct), safeCount(row.total)), total: safeCount(row.total) }
+  }
+  Object.keys(SKILL_GENERATORS).forEach(function (skill) {
+    var row = isRecord(value.practiceSkills) && value.practiceSkills[skill]
+    if (isRecord(row)) learner.practiceSkills[skill] = {
+      total: safeCount(row.total), independent: Math.min(safeCount(row.independent), safeCount(row.total)) }
+  })
+  if (Array.isArray(value.notebook)) {
+    value.notebook.slice(-LIMITS.notebook).forEach(function (entry) {
+      if (!isRecord(entry) || typeof entry.code !== "string" ||
+          !/^LAB1-[1-6]-\d{1,10}-[BM]$/.test(entry.code)) return
+      learner.notebook.push({ code: entry.code, a: safeCount(entry.a), b: safeCount(entry.b),
+        title: cleanText(entry.title, 80), note: cleanText(entry.note, 160) })
+    })
+  }
+  if (isRecord(value.garden)) {
+    learner.garden = { version: 1, level: Math.max(1, Math.min(3, safeCount(value.garden.level) || 1)),
+      reducedMotion: value.garden.reducedMotion === true, activities: {} }
+    var activities = isRecord(value.garden.activities) ? value.garden.activities : {}
+    "count join take ten tens parity primes powers coordinates angles area slope".split(" ").forEach(function (kind) {
+      var row = isRecord(activities[kind]) ? activities[kind] : {}
+      learner.garden.activities[kind] = { solved: safeCount(row.solved),
+        supported: Math.min(safeCount(row.solved), safeCount(row.supported)) }
+    })
+  }
+  return learner
+}
+
+function decodeProgress(raw) {
+  var data = parseBounded(raw || {}, LIMITS.stateBytes, LIMITS.depth)
+  if (!isRecord(data)) return null
+  var clean = emptyProgress()
+  var learners = isRecord(data.learners) ? data.learners : {}
+  var ids = Object.keys(learners)
+  if (ids.length > LIMITS.learners) return null
+  for (var i = 0; i < ids.length; i++) {
+    if (!validLearnerId(ids[i])) return null
+    Object.defineProperty(clean.learners, ids[i], { value: normalizeLearner(learners[ids[i]]),
+      enumerable: true, writable: true, configurable: true })
+  }
+  if (isRecord(data.lastAssessment) && Array.isArray(data.lastAssessment.items)) {
+    if (data.lastAssessment.items.length > LIMITS.items) return null
+    var previous = data.lastAssessment
+    clean.lastAssessment = buildResult({ mode: "assessment", status: previous.status,
+      learnerId: previous.learnerId, levelId: previous.level, seed: previous.seed,
+      startedAt: previous.startedAt, finishedAt: previous.finishedAt, items: previous.items })
+  }
+  return boundedValue(clean, LIMITS.stateBytes, LIMITS.depth) ? clean : null
+}
+
+function normalizeProgress(raw) {
+  return decodeProgress(raw) || emptyProgress()
 }
 
 function learnerRecord(progress, learnerId) {
-  var id = String(learnerId || "default")
+  var id = learnerId === undefined ? "default" : learnerId
+  if (!validLearnerId(id)) return null
   var data = progress || emptyProgress()
   if (!data.learners || typeof data.learners !== "object" || Array.isArray(data.learners)) data.learners = {}
   if (!Object.prototype.hasOwnProperty.call(data.learners, id) || !data.learners[id] ||
       typeof data.learners[id] !== "object" || Array.isArray(data.learners[id])) {
+    if (Object.keys(data.learners).length >= LIMITS.learners) return null
     Object.defineProperty(data.learners, id, { value: {}, enumerable: true, writable: true, configurable: true })
   }
   var learner = data.learners[id]
@@ -704,6 +864,7 @@ function recordRound(progress, learnerId, levelId, correct, total, streak) {
   var data = normalizeProgress(progress)
   if (!(total > 0)) return data
   var learner = learnerRecord(data, learnerId)
+  if (!learner) return data
   var id = clampLevelId(levelId)
   learner.lastPlayedAt = new Date().toISOString()
   learner.rounds++
@@ -723,6 +884,7 @@ function recordSession(progress, result, bestStreak) {
   var data = normalizeProgress(progress)
   if (!result || !result.total) return data
   var learner = learnerRecord(data, result.learnerId)
+  if (!learner) return data
   learner.lastPlayedAt = result.finishedAt
   learner.bestStreak = Math.max(learner.bestStreak, bestStreak || 0)
   if (result.status === "complete") learner.rounds++
@@ -752,15 +914,22 @@ function recordSession(progress, result, bestStreak) {
 }
 
 function parsePayload(raw) {
-  var args = {}
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    args = raw
-  } else if (raw) {
-    try {
-      args = JSON.parse(String(raw)) || {}
-    } catch (e) {
-      args = {}
-    }
+  var args = parseBounded(raw === undefined || raw === "" ? "{}" : raw, LIMITS.payloadBytes, 1)
+  if (!isRecord(args)) return null
+  var allowed = ["mode", "level", "count", "learnerId", "seed", "input", "adaptive", "start"]
+  var keys = Object.keys(args)
+  for (var i = 0; i < keys.length; i++) {
+    if (allowed.indexOf(keys[i]) === -1) return null
+  }
+  if (args.mode !== undefined && args.mode !== "practice" && args.mode !== "assessment") return null
+  if (args.learnerId !== undefined && !validLearnerId(args.learnerId)) return null
+  if (args.input !== undefined && args.input !== "choices" && args.input !== "keypad") return null
+  if (args.adaptive !== undefined && typeof args.adaptive !== "boolean") return null
+  if (args.start !== undefined && typeof args.start !== "boolean") return null
+  for (var n = 0; n < 3; n++) {
+    var number = args[["level", "count", "seed"][n]]
+    if (number !== undefined && (typeof number !== "number" || !isFinite(number) ||
+        Math.floor(number) !== number || Math.abs(number) > Number.MAX_SAFE_INTEGER)) return null
   }
 
   var mode = args.mode === "assessment" ? "assessment" : "practice"
@@ -793,7 +962,18 @@ function parsePayload(raw) {
 
 function buildResult(session) {
   var s = session || {}
-  var items = Array.isArray(s.items) ? s.items : []
+  if (!boundedValue(s, LIMITS.ipcBytes, LIMITS.depth) ||
+      (Array.isArray(s.items) && s.items.length > LIMITS.items)) return null
+  var items = (Array.isArray(s.items) ? s.items : []).filter(function (item) {
+    return isRecord(item) && Object.prototype.hasOwnProperty.call(SKILL_GENERATORS, item.skill)
+  }).map(function (item) {
+    return { id: cleanText(item.id, 100), skill: item.skill, levelId: clampLevelId(item.levelId),
+      prompt: cleanText(item.prompt, 512),
+      answer: typeof item.answer === "number" ? item.answer : null,
+      response: typeof item.response === "number" ? item.response : null,
+      correct: item.correct === true, attempts: Math.max(1, Math.min(2, safeCount(item.attempts) || 1)),
+      hintUsed: item.hintUsed === true, ms: safeCount(item.ms) }
+  })
   var correct = 0
   var totalMs = 0
   for (var i = 0; i < items.length; i++) {
@@ -805,14 +985,14 @@ function buildResult(session) {
   var recommended = recommendLevel(items)
   if (s.levelId && total < 3) recommended = clampLevelId(s.levelId)
   var level = levelById(s.levelId || recommended)
-  return {
+  var result = {
     pluginId: "omarchykids.math",
     schemaVersion: 1,
-    mode: s.mode || "practice",
-    status: s.status || "complete",
-    learnerId: s.learnerId || "default",
-    startedAt: s.startedAt || "",
-    finishedAt: s.finishedAt || new Date().toISOString(),
+    mode: s.mode === "assessment" ? "assessment" : "practice",
+    status: s.status === "abandoned" ? "abandoned" : "complete",
+    learnerId: validLearnerId(s.learnerId) ? s.learnerId : "default",
+    startedAt: cleanText(s.startedAt, 32),
+    finishedAt: cleanText(s.finishedAt, 32) || new Date().toISOString(),
     level: level.id,
     levelName: level.name,
     ageBand: level.ages,
@@ -826,15 +1006,16 @@ function buildResult(session) {
     skillScores: skillScores(items),
     items: items
   }
+  return boundedValue(result, LIMITS.ipcBytes, LIMITS.depth) ? result : null
 }
 
 function catalogJson() {
-  return JSON.stringify({
+  return boundedJson({
     pluginId: "omarchykids.math",
     schemaVersion: 1,
     ageRange: "5-12",
     levels: levels()
-  })
+  }, LIMITS.ipcBytes) || "{}"
 }
 
 if (typeof module !== "undefined") {
@@ -856,6 +1037,12 @@ if (typeof module !== "undefined") {
     nextAdaptiveLevel: nextAdaptiveLevel,
     recommendLevel: recommendLevel,
     emptyProgress: emptyProgress,
+    LIMITS: LIMITS,
+    utf8Bytes: utf8Bytes,
+    boundedValue: boundedValue,
+    boundedJson: boundedJson,
+    parseBounded: parseBounded,
+    decodeProgress: decodeProgress,
     normalizeProgress: normalizeProgress,
     learnerRecord: learnerRecord,
     recordRound: recordRound,

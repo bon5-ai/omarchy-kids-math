@@ -12,14 +12,16 @@ AI Tutor. Development also lives under `plugins/math` in
 It follows the Quattro plugin contract (`overlay` + `bar-widget`), uses the
 active theme tokens, and does not start a second Quickshell process.
 
-**Dependencies:** Omarchy Quattro (`omarchy-shell` / Quickshell), with
+**Dependencies:** Omarchy Quattro (`omarchy-shell` / Quickshell), Python 3
+(`/usr/bin/python3`, standard library only) for checked local persistence, with
 [`qt6-quick3d`](https://archlinux.org/packages/extra/x86_64/qt6-quick3d/) for
 3D objects. The garden stays inside the existing overlay. It uses native QML
 picture counters if the 3D module is absent or Qt uses its software scene graph.
 Optional narration uses Qt TextToSpeech and a local English voice. Everything
 works offline, with no account, browser, web server, Node runtime or install hooks.
-Progress and garden settings live in `~/.local/state/omarchy/kids-math.json`;
-opening the plugin does not write that file. License: MIT.
+Progress and garden settings live in
+`~/.local/state/omarchy/kids-math/progress.json`; opening the plugin does not
+write state or create directories. License: MIT.
 
 ## Screenshots
 
@@ -87,7 +89,7 @@ turned one block into four, with one more step to explore.
 For 3D rendering on Omarchy, install the Qt module once:
 
 ```sh
-sudo pacman -S --needed qt6-quick3d
+sudo pacman -S --needed qt6-quick3d python
 ```
 
 Then install the plugin:
@@ -237,9 +239,34 @@ away.
 | 5 | Bigger numbers | 9–10 | 2-digit × 1-digit, exact division, mixed +/− |
 | 6 | Parts & percents | 10–12 | Fraction of a whole, percent of, order of ops, negatives |
 
-Progress lives in `~/.local/state/omarchy/kids-math.json` (preferred level,
+Progress lives in `~/.local/state/omarchy/kids-math/progress.json` (preferred level,
 round counts, skill practice history, saved inventions, garden observations and
 garden settings). Removing the plugin does not delete that file.
+
+The persistence helper opens each directory relative to an already checked
+descriptor, rejects symlinks at every path component, checks ownership and
+permissions, and accepts only singly linked regular files. The plugin's state
+directory is private (0700), with a 0600 state file. Writes use an exclusive
+temporary file, `fsync`, and atomic replacement within that directory. Ancestors
+must belong to the user (or root above the account home) and must not be writable
+by other users or groups. Unsafe paths are rejected without changing permissions.
+The account database supplies the home directory; summon payloads and environment
+variables cannot select state paths.
+
+When the new state file is absent, the helper can read the previous
+`~/.local/state/omarchy/kids-math.json` through the same bounded, no-follow checks.
+The legacy file may be 0644 but cannot have external writers or extra hard links.
+Valid progress is saved at the new location on the next learning activity; the
+old file is retained. Invalid or unsafe state found while loading disables
+persistence for that shell session and displays a notice. It is not overwritten. State is loaded once
+per shell session; external edits take effect when the plugin is reloaded.
+
+Only one helper write runs at a time, with one pending snapshot coalescing newer
+changes. The helper is a fixed argument-vector invocation of the bundled
+`StateStore.py` using `/usr/bin/python3 -I -S`, a cleared environment and bounded
+CPU, memory, file size and lifetime. It runs no shell commands, opens no network
+connections and accepts no caller-supplied paths. Quitting the shell while a save
+is pending may leave the previous complete snapshot on disk.
 
 Version 1.3 replaces the browser garden. Existing practice, assessments and
 invention books are preserved. Old browser observations are not automatically
@@ -253,6 +280,19 @@ to review those observations; this update does not clear browser data.
 Keep the overlay loaded (`keepLoaded` is set) so the tutor can summon it with
 a payload and later `call` for the same session’s JSON. Results are returned
 only over shell IPC. The summon payload does not accept file paths.
+
+Summon JSON is limited to 4 KiB of UTF-8, a single object and the fields listed
+below; unknown fields, nested values and incorrect types are rejected before a
+session changes. Learner IDs are nonempty strings of at most 64 UTF-8 bytes,
+without control characters. At most 16 learner profiles are retained; a new ID
+at capacity is rejected without evicting or sharing an existing profile.
+
+State input and output are capped at 256 KiB, 12 container levels, 64 keys per
+object, 12,000 values and 512 UTF-16 code units per string. State is rebuilt from
+known fields: six practice levels, the catalog's skill keys, 12 garden activities,
+60 notebook entries per learner and 40 assessment items. Counters saturate at
+1,000,000. Each IPC result is capped at 64 KiB before serialization and return;
+oversized results return `{}`. Output ceilings are checked before persistence.
 
 Summon an assessment:
 
@@ -279,12 +319,16 @@ omarchy-shell shell call omarchykids.math lastResult '{}'
 | Payload field | Meaning |
 | --- | --- |
 | `mode` | `practice` or `assessment` (assessment starts immediately) |
-| `learnerId` | Child key used in the progress file |
+| `learnerId` | Child key; 1–64 UTF-8 bytes, no control characters |
 | `level` | 1–6 starting band; omitted assessment starts at 3 |
 | `count` | Question cap (default 10 practice / 12 assessment, max 40) |
 | `seed` | Repeatable item stream |
 | `adaptive` | Assessment default `true`; every 3 items may move a level |
 | `input` | Force `choices` or `keypad` |
+| `start` | Boolean; start practice immediately (assessment always starts) |
+
+`level`, `count` and `seed` must be finite safe integers. `adaptive` and `start`
+must be booleans. Omitted fields use the defaults above.
 
 Result shape:
 
@@ -337,6 +381,8 @@ omarchy plugin validate .
 node tests/math-engine-test.js
 node tests/lab-engine-test.js
 node --test tests/garden-engine-test.js
+node --test tests/state-boundaries-test.js
+python3 tests/state-store-test.py
 ```
 
 If Omarchy is installed, also:
@@ -348,7 +394,9 @@ omarchy-shell shell rescanPlugins
 
 `MathEngine.js`, `LabEngine.js` and `GardenEngine.js` are shared by QML and Node.
 Tests exercise all skills, thousands of generated puzzles, persistence, and
-assessment isolation.
+assessment isolation. Security regressions cover pre-parse byte/depth limits,
+closed payload schemas, aggregate budgets, learner cardinality, unsafe filesystem
+targets, directory swaps, growth during reads and failed atomic replacement.
 
 ### Math Garden
 
