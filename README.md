@@ -7,7 +7,7 @@ practice for ages 5–12, and a JSON assessment contract for the Kids AI Tutor.
 
 This is a standalone shell plugin (`omarchykids.math`). It is **not** the
 AI Tutor. Development also lives under `plugins/math` in
-[omarchy-kids-ai-tutor](https://github.com/mikeg0/omarchy-kids-ai-tutor).
+[omarchy-kids-ai-tutor](https://github.com/bon5-ai/omarchy-kids-ai-tutor).
 
 It follows the Quattro plugin contract (`overlay` + `bar-widget`), uses the
 active theme tokens, and does not start a second Quickshell process.
@@ -95,7 +95,7 @@ sudo pacman -S --needed qt6-quick3d python
 Then install the plugin:
 
 ```sh
-omarchy plugin add https://github.com/mikeg0/omarchy-kids-math.git --enable
+omarchy plugin add https://github.com/bon5-ai/omarchy-kids-math.git --enable
 ```
 
 That clones the plugin into `~/.config/omarchy/plugins/omarchykids.math/`,
